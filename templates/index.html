@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Chat</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 600px; margin: auto; }
+        .chat-box { max-height: 500px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
+        .user-message { background-color: #f1f1f1; padding: 8px; border-radius: 5px; margin-bottom: 5px; }
+        .bot-message { background-color: #e1f5fe; padding: 8px; border-radius: 5px; margin-bottom: 5px; }
+        input, button { width: 100%; padding: 10px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <h2>AI Chat</h2>
+
+    <div class="chat-box">
+        {% for message in chat_history %}
+            <div class="user-message"><strong>You:</strong> {{ message.user }}</div>
+            <div class="bot-message"><strong>Bot:</strong> {{ message.bot }}</div>
+        {% endfor %}
+    </div>
+
+    <form method="POST">
+        {% csrf_token %}
+        <input type="text" name="question" placeholder="Type your message..." required>
+        <button type="submit">Send</button>
+    </form>
+</body>
+</html>
+<script>
+    document.addEventListener("DOMContentLoaded", function () {
+        var chatBox = document.querySelector(".chat-box");
+        chatBox.scrollTop = chatBox.scrollHeight;
+    });
+</script>
