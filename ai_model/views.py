@@ -14,7 +14,7 @@ def index(request):
         full_prompt = f"{conversation}\nYou: {user_input}\nBot:"
 
         # Ollama API çağrısı
-        url = "http://localhost:11434/api/generate"
+        url = "http://host.docker.internal:11434/api/generate"
         data = {
             "model": "gemma3:1b",
             "prompt": full_prompt,
