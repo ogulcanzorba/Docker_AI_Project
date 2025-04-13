@@ -1,37 +1,79 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
+  {% load static %}
+
+  <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Chat</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 600px; margin: auto; }
-        .chat-box { max-height: 500px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
-        .user-message { background-color: #f1f1f1; padding: 8px; border-radius: 5px; margin-bottom: 5px; }
-        .bot-message { background-color: #e1f5fe; padding: 8px; border-radius: 5px; margin-bottom: 5px; }
-        input, button { width: 100%; padding: 10px; margin-top: 5px; }
-    </style>
-</head>
-<body>
-    <h2>AI Chat</h2>
+    <title>Chat with AI Tutor | CS Tutor</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+  </head>
 
-    <div class="chat-box">
+  <body class="chat-page">
+
+    <header>
+      <p>
+        Welcome, {{ request.user.username }} |
+        <form method="post" action="{% url 'logout' %}" style="display:inline;">
+          {% csrf_token %}
+          <button type="submit" style="background:none; border:none; color:#4CAF50; cursor:pointer; padding:0;">Logout</button>
+        </form>
+      </p>
+    </header>
+
+    <div class="chat-container">
+
+      <!-- Chat History Section -->
+      <div class="chat-box" id="chat-box">
         {% for message in chat_history %}
-            <div class="user-message"><strong>You:</strong> {{ message.user }}</div>
-            <div class="bot-message"><strong>Bot:</strong> {{ message.bot }}</div>
+          <div class="message">
+            <p><strong>You:</strong> {{ message.user_input }}</p>
+            <p><strong>Bot:</strong> {{ message.bot_response }}</p>
+          </div>
         {% endfor %}
+      </div>
+
+      <!-- User Input Form -->
+      <form method="post" class="chat-form" id="chat-form">
+        {% csrf_token %}
+        <input type="text" name="question" id="user-question" placeholder="Ask a question..." required>
+        <button type="submit">Send</button>
+      </form>
     </div>
 
-    <form method="POST">
-        {% csrf_token %}
-        <input type="text" name="question" placeholder="Type your message..." required>
-        <button type="submit">Send</button>
-    </form>
-</body>
+    <!-- Script for Handling Chat -->
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        const form = document.getElementById('chat-form');
+        const input = document.getElementById('user-question');
+        const chatBox = document.getElementById('chat-box');
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+        form.addEventListener('submit', function (e) {
+          e.preventDefault();
+
+          const question = input.value.trim();
+          if (!question) return;
+
+          fetch('', {
+            method: 'POST',
+            headers: {
+              'X-CSRFToken': csrfToken,
+              'X-Requested-With': 'XMLHttpRequest',
+              'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: new URLSearchParams({ question: question })
+          })
+            .then(response => response.json())
+            .then(data => {
+              chatBox.innerHTML = data.html;
+              chatBox.scrollTop = chatBox.scrollHeight;
+            });
+
+          input.value = '';
+        });
+      });
+    </script>
+
+  </body>
 </html>
-<script>
-    document.addEventListener("DOMContentLoaded", function () {
-        var chatBox = document.querySelector(".chat-box");
-        chatBox.scrollTop = chatBox.scrollHeight;
-    });
-</script>
