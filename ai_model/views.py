@@ -1,4 +1,3 @@
-from django.http import JsonResponse
 from django.shortcuts import render
 from django.contrib.auth.forms import UserCreationForm
 from django.shortcuts import redirect
@@ -22,7 +21,7 @@ def index(request):
         )
         full_prompt = f"{conversation}\nYou: {user_input}\nBot:"
 
-        url = "http://host.docker.internal:11434/api/generate"
+        url = "http://ollama:11434/api/generate"
         data = {
             "model": "gemma3:1b",
             "prompt": full_prompt,
@@ -81,7 +80,7 @@ def signup(request):
 def generate_ai_response(request):
     user_prompt = request.GET.get('prompt', 'Explain AI')
 
-    url = "http://localhost:11434/api/generate"
+    url = "http://ollama:11434/api/generate"
     data = {
         "model": "gemma3:1b",
         "prompt": user_prompt,
@@ -89,6 +88,9 @@ def generate_ai_response(request):
     }
 
     response = requests.post(url, json=data)
+    print("Status Code:", response.status_code)
+    print("Response Text:", response.text)
+
     return JsonResponse(response.json())
 
 
