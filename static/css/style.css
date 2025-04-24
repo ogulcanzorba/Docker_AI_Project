@@ -48,13 +48,13 @@ body {
 }
 
 .nav-links a:hover {
-  color: #68d391;
+  color: #115DFC;
 }
 
 .nav-button {
   background: none;
   border: none;
-  color: #68d391;
+  color: #115DFC;
   cursor: pointer;
   font-weight: 500;
   font-size: 0.9rem;
@@ -192,7 +192,7 @@ h2 {
 
 button {
   padding: 0.75rem 1.5rem;
-  background-color: #48bb78;
+  background-color: #115DFC;
   color: #ffffff;
   border: none;
   border-radius: 6px;
@@ -202,11 +202,11 @@ button {
 }
 
 button:hover {
-  background-color: #38a169;
+  background-color: #115DFC;
 }
 
 button:active {
-  background-color: #2f855a;
+  background-color: #115DFC;
 }
 
 /* Error Messages */
