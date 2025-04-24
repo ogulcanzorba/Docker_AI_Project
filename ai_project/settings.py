@@ -19,7 +19,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = config('SECRET_KEY', default='django-insecure-5hu%(7*#%j66vd41m%#_1wi=orzk*xtfrv=0ny(w%vv26zog4h')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = config('DEBUG', default=True, cast=bool)
+DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
@@ -111,17 +111,12 @@ TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.1/howto/static-files/
-STATIC_URL = '/static/'  # URL for static files
-
-# For development, this will allow serving of static files from the 'static' folder
+# settings.py
+STATIC_URL = '/static/'
 STATICFILES_DIRS = [
-    BASE_DIR / "static",  # Assumes static is in the same directory as manage.py
+    BASE_DIR / "static",
 ]
-
-# Directory where collected static files will be stored (for production)
-STATIC_ROOT = BASE_DIR / 'staticfiles'  # Make sure this folder exists or is created during collectstatic
+STATIC_ROOT = BASE_DIR / "staticfiles"  # For collectstatic
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field

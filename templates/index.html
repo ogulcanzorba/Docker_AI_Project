@@ -1,79 +1,47 @@
+{% load static %}
+
+
+
 <!DOCTYPE html>
 <html lang="en">
-  {% load static %}
 
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Chat with AI Tutor | CS Tutor</title>
-    <link rel="stylesheet" href="{% static 'css/style.css' %}">
-  </head>
 
-  <body class="chat-page">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CS Tutor | Select a Lecture</title>
+  <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
 
-    <header>
-      <p>
-        Welcome, {{ request.user.username }} |
+<body>
+  <header>
+    <nav class="navbar">
+      <a href="{% url 'lecture_list' %}" class="nav-brand">CS Tutor</a>
+      <div class="nav-links">
+        <span>Welcome, {{ request.user.username }}</span>
+        <a href="{% url 'lecture_list' %}">Lectures</a>
         <form method="post" action="{% url 'logout' %}" style="display:inline;">
           {% csrf_token %}
-          <button type="submit" style="background:none; border:none; color:#4CAF50; cursor:pointer; padding:0;">Logout</button>
+          <button type="submit" class="nav-button">Logout</button>
         </form>
-      </p>
-    </header>
+      </div>
+    </nav>
+  </header>
 
-    <div class="chat-container">
-
-      <!-- Chat History Section -->
-      <div class="chat-box" id="chat-box">
-        {% for message in chat_history %}
-          <div class="message">
-            <p><strong>You:</strong> {{ message.user_input }}</p>
-            <p><strong>Bot:</strong> {{ message.bot_response }}</p>
-          </div>
+  <div class="container">
+    <h2>Available Lectures</h2>
+    {% if lectures %}
+      <div class="lecture-grid">
+        {% for lecture in lectures %}
+          <a href="{% url 'lecture' lecture.name %}" class="lecture-card">
+            <h3>{{ lecture.title }}</h3>
+            <p>Explore topics in {{ lecture.title }}.</p>
+          </a>
         {% endfor %}
       </div>
-
-      <!-- User Input Form -->
-      <form method="post" class="chat-form" id="chat-form">
-        {% csrf_token %}
-        <input type="text" name="question" id="user-question" placeholder="Ask a question..." required>
-        <button type="submit">Send</button>
-      </form>
-    </div>
-
-    <!-- Script for Handling Chat -->
-    <script>
-      document.addEventListener('DOMContentLoaded', function () {
-        const form = document.getElementById('chat-form');
-        const input = document.getElementById('user-question');
-        const chatBox = document.getElementById('chat-box');
-        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
-
-        form.addEventListener('submit', function (e) {
-          e.preventDefault();
-
-          const question = input.value.trim();
-          if (!question) return;
-
-          fetch('', {
-            method: 'POST',
-            headers: {
-              'X-CSRFToken': csrfToken,
-              'X-Requested-With': 'XMLHttpRequest',
-              'Content-Type': 'application/x-www-form-urlencoded'
-            },
-            body: new URLSearchParams({ question: question })
-          })
-            .then(response => response.json())
-            .then(data => {
-              chatBox.innerHTML = data.html;
-              chatBox.scrollTop = chatBox.scrollHeight;
-            });
-
-          input.value = '';
-        });
-      });
-    </script>
-
-  </body>
+    {% else %}
+      <p class="no-lectures">No lectures available at the moment.</p>
+    {% endif %}
+  </div>
+</body>
 </html>
