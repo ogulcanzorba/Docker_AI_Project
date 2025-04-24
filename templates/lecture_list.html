@@ -1,0 +1,10 @@
+{% extends "index.html" %}
+
+{% block content %}
+  <h2>Available Lectures</h2>
+  <ul>
+    {% for lecture in lectures %}
+      <li><a href="{% url 'lecture' lecture.name %}">{{ lecture.title }}</a></li>
+    {% endfor %}
+  </ul>
+{% endblock %}

@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+{% load static %}
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ lecture_title }} | CS Tutor</title>
+  <link rel="stylesheet" href="{% static 'css/style.css' %}">
+</head>
+
+<body>
+  <header>
+    <nav class="navbar">
+      <a href="{% url 'lecture_list' %}" class="nav-brand">CS Tutor</a>
+      <div class="nav-links">
+        <span>Welcome, {{ request.user.username }}</span>
+        <a href="{% url 'lecture_list' %}">Lectures</a>
+        <form method="post" action="{% url 'logout' %}" style="display:inline;">
+          {% csrf_token %}
+          <button type="submit" class="nav-button">Logout</button>
+        </form>
+      </div>
+    </nav>
+  </header>
+
+  <div class="container">
+    <h2>{{ lecture_title }}</h2>
+    <form method="post" id="chat-form" class="chat-form">
+      {% csrf_token %}
+      <input type="text" name="question" id="user-question" placeholder="Ask about {{ lecture_title }}..." required>
+      <button type="submit">Send</button>
+    </form>
+
+    <div id="chat-box" class="chat-box">
+      {% include "partials/lecture_chat.html" %}
+    </div>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const form = document.getElementById('chat-form');
+      const input = document.getElementById('user-question');
+      const chatBox = document.getElementById('chat-box');
+      const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+
+        const question = input.value.trim();
+        if (!question) return;
+
+        fetch('', {
+          method: 'POST',
+          headers: {
+            'X-CSRFToken': csrfToken,
+            'X-Requested-With': 'XMLHttpRequest',
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: new URLSearchParams({ question: question })
+        })
+          .then(response => response.json())
+          .then(data => {
+            chatBox.innerHTML = data.html;
+            chatBox.scrollTop = chatBox.scrollHeight;
+          })
+          .catch(error => console.error('Error:', error));
+
+        input.value = '';
+      });
+    });
+  </script>
+</body>
+</html>

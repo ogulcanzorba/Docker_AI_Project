@@ -1,25 +1,30 @@
+{% load static %}
 <!DOCTYPE html>
 <html lang="en">
-{% load static %}
-
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign Up | CS Tutor</title>
-    <link rel="stylesheet" href="{% static 'css/style.css' %}">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign Up | CS Tutor</title>
+  <link rel="stylesheet" href="{% static 'css/style.css' %}">
 </head>
-<body class="signup-page">
+<body>
+  <header>
+    <nav class="navbar">
+      <a href="{% url 'login' %}" class="nav-brand">CS Tutor</a>
+      <div class="nav-links">
+        <a href="{% url 'login' %}">Login</a>
+      </div>
+    </nav>
+  </header>
 
-    <div class="auth-container">
-        <h1>Welcome to CS Tutor AI</h1>
-        <h2>Create an Account</h2>
-        <form method="post" class="auth-form">
-            {% csrf_token %}
-            {{ form.as_p }}
-            <button type="submit" class="btn-submit">Sign Up</button>
-        </form>
-        <p>Already have an account? <a href="{% url 'login' %}">Log in</a></p>
-    </div>
-
+  <div class="container">
+    <h2>Sign Up</h2>
+    <form method="post" class="auth-form">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <button type="submit">Sign Up</button>
+    </form>
+    <p>Already have an account? <a href="{% url 'login' %}">Log in</a></p>
+  </div>
 </body>
 </html>
