@@ -10,6 +10,7 @@ from django.http import JsonResponse
 import os
 import requests
 
+
 @login_required
 def lecture_list(request):
     lectures = [
@@ -33,6 +34,7 @@ def lecture_view(request, lecture_name):
     if not config:
         return render(request, '404.html', {'error': 'Lecture not found'}, status=404)
 
+    # Fetch chat history
     chat_history = ChatHistory.objects.filter(
         user=request.user, lecture=config['lecture_id']
     ).order_by('created_at')
@@ -59,10 +61,13 @@ def lecture_view(request, lecture_name):
         response = requests.post("http://ollama:11434/api/generate", json=data)
         bot_response = response.json().get("response", "Sorry, no response.")
 
+
+
+        # Save to ChatHistory
         ChatHistory.objects.create(
             user=request.user,
             user_input=user_input,
-            bot_response=bot_response,
+            bot_response=bot_response,  # Store the HTML version
             lecture=config['lecture_id']
         )
 
@@ -81,7 +86,7 @@ def lecture_view(request, lecture_name):
 
 def login_page(request):
     if request.user.is_authenticated:
-        return redirect('lecture_list')  # Redirect to lecture list if logged in
+        return redirect('lecture_list')
     if request.method == 'POST':
         form = UserLoginForm(request.POST)
         if form.is_valid():
@@ -90,7 +95,7 @@ def login_page(request):
             user = authenticate(request, username=username, password=password)
             if user is not None:
                 login(request, user)
-                return redirect('lecture_list')  # Redirect to lecture list
+                return redirect('lecture_list')
             else:
                 messages.error(request, "Invalid username or password.")
     else:
@@ -99,13 +104,13 @@ def login_page(request):
 
 def signup(request):
     if request.user.is_authenticated:
-        return redirect('lecture_list')  # Redirect to lecture list
+        return redirect('lecture_list')
     if request.method == 'POST':
         form = UserCreationForm(request.POST)
         if form.is_valid():
             user = form.save()
             login(request, user)
-            return redirect('lecture_list')  # Redirect to lecture list
+            return redirect('lecture_list')
     else:
         form = UserCreationForm()
     return render(request, 'signup.html', {'form': form})

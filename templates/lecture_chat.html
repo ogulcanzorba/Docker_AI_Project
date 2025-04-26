@@ -7,6 +7,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{{ lecture_title }} | CS Tutor</title>
   <link rel="stylesheet" href="{% static 'css/style.css' %}">
+  <link rel="stylesheet" href="{% static 'css/chat.css' %}">
 </head>
 
 <body>
@@ -26,14 +27,23 @@
 
   <div class="container">
     <h2>{{ lecture_title }}</h2>
-    <form method="post" id="chat-form" class="chat-form">
-      {% csrf_token %}
-      <input type="text" name="question" id="user-question" placeholder="Ask about {{ lecture_title }}..." required>
-      <button type="submit">Send</button>
-    </form>
-
-    <div id="chat-box" class="chat-box">
-      {% include "partials/lecture_chat.html" %}
+    <div class="card-container">
+      <div class="card-header">
+        <div class="img-avatar"></div>
+        <div class="text-chat">Chat</div>
+      </div>
+      <div class="card-body">
+        <div class="messages-container" id="chat-box">
+          {% include "partials/lecture_chat.html" %}
+        </div>
+        <div class="message-input">
+          <form method="post" id="chat-form">
+            {% csrf_token %}
+            <textarea name="question" id="user-question" placeholder="Ask about {{ lecture_title }}..." class="message-send" required></textarea>
+            <button type="submit" class="button-send">Send</button>
+          </form>
+        </div>
+      </div>
     </div>
   </div>
 

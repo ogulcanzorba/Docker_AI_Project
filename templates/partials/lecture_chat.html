@@ -1,8 +1,12 @@
-{% for message in chat_history %}
-  <div class="message">
-    <p><strong>You:</strong> {{ message.user_input }}</p>
-    <p><strong>Bot:</strong> {{ message.bot_response }}</p>
-  </div>
-{% empty %}
-  <p>No chat history yet. Start asking questions!</p>
+{% for chat in chat_history %}
+  {% if chat.user_input %}
+    <div class="message-box right">
+      <p>{{ chat.user_input|safe }}</p>
+    </div>
+  {% endif %}
+  {% if chat.bot_response %}
+    <div class="message-box left">
+      {{ chat.bot_response|safe }}
+    </div>
+  {% endif %}
 {% endfor %}
