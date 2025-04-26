@@ -1,84 +1,141 @@
 <!DOCTYPE html>
 <html lang="en">
-{% load static %}
+  {% load static %}
 
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ lecture_title }} | CS Tutor</title>
-  <link rel="stylesheet" href="{% static 'css/style.css' %}">
-  <link rel="stylesheet" href="{% static 'css/chat.css' %}">
-</head>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ lecture_title }} | CS Tutor</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}" />
+    <link rel="stylesheet" href="{% static 'css/chat.css' %}" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
+      integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw=="
+      crossorigin="anonymous"
+    />
+  </head>
 
-<body>
-  <header>
-    <nav class="navbar">
-      <a href="{% url 'lecture_list' %}" class="nav-brand">CS Tutor</a>
-      <div class="nav-links">
-        <span>Welcome, {{ request.user.username }}</span>
-        <a href="{% url 'lecture_list' %}">Lectures</a>
-        <form method="post" action="{% url 'logout' %}" style="display:inline;">
-          {% csrf_token %}
-          <button type="submit" class="nav-button">Logout</button>
-        </form>
-      </div>
-    </nav>
-  </header>
-
-  <div class="container">
-    <h2>{{ lecture_title }}</h2>
-    <div class="card-container">
-      <div class="card-header">
-        <div class="img-avatar"></div>
-        <div class="text-chat">Chat</div>
-      </div>
-      <div class="card-body">
-        <div class="messages-container" id="chat-box">
-          {% include "partials/lecture_chat.html" %}
-        </div>
-        <div class="message-input">
-          <form method="post" id="chat-form">
+  <body>
+    <header>
+      <nav class="navbar">
+        <a href="{% url 'lecture_list' %}" class="nav-brand">CS Tutor</a>
+        <div class="nav-links">
+          <span>Welcome, {{ request.user.username }}</span>
+          <a href="{% url 'lecture_list' %}">Lectures</a>
+          <form
+            method="post"
+            action="{% url 'logout' %}"
+            style="display: inline"
+          >
             {% csrf_token %}
-            <textarea name="question" id="user-question" placeholder="Ask about {{ lecture_title }}..." class="message-send" required></textarea>
-            <button type="submit" class="button-send">Send</button>
+            <button type="submit" class="nav-button">Logout</button>
           </form>
         </div>
+      </nav>
+    </header>
+
+    <main class="container">
+      <h2>
+        <i
+          class="fas {% if lecture_name == 'algorithms_data_structures' %}fa-code{% elif lecture_name == 'networking' %}fa-network-wired{% else %}fa-server{% endif %}"
+        ></i>
+        {{ lecture_title }}
+      </h2>
+      <div class="card-container">
+        <div class="card-header">
+          <div class="img-avatar"></div>
+          <div class="text-chat">Chat with CS Tutor</div>
+        </div>
+        <div class="card-body">
+          <div class="messages-container" id="chat-box">
+            {% include "partials/lecture_chat.html" %} {% if not chat_history %}
+            <p class="no-messages">
+              {% if lecture_name == 'networking' %} Tip: Ask about TCP/IP, OSI
+              model, routing, or network security. For data structures, try
+              Algorithms and Data Structures. {% elif lecture_name ==
+              'operating_systems' %} Tip: Ask about processes, memory
+              management, or scheduling. For networking, try Networking. {% else
+              %} Tip: Ask about sorting, searching, or data structures like hash
+              tables. For networking or OS, try those lectures. {% endif %}
+            </p>
+            {% endif %}
+          </div>
+          <div class="message-input">
+            <form method="post" id="chat-form">
+              {% csrf_token %}
+              <textarea
+                name="question"
+                id="user-question"
+                placeholder="Ask about {{ lecture_title }}..."
+                class="message-send"
+                required
+              ></textarea>
+              <button type="submit" class="button-send">
+                <i class="fas fa-paper-plane"></i> Send
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
-    </div>
-  </div>
+    </main>
 
-  <script>
-    document.addEventListener('DOMContentLoaded', function () {
-      const form = document.getElementById('chat-form');
-      const input = document.getElementById('user-question');
-      const chatBox = document.getElementById('chat-box');
-      const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+    <script>
+      document.addEventListener("DOMContentLoaded", function () {
+        const form = document.getElementById("chat-form");
+        const input = document.getElementById("user-question");
+        const chatBox = document.getElementById("chat-box");
+        const csrfToken = document.querySelector(
+          "[name=csrfmiddlewaretoken]"
+        ).value;
 
-      form.addEventListener('submit', function (e) {
-        e.preventDefault();
+        form.addEventListener("submit", function (e) {
+          e.preventDefault();
 
-        const question = input.value.trim();
-        if (!question) return;
+          const question = input.value.trim();
+          if (!question) return;
 
-        fetch('', {
-          method: 'POST',
-          headers: {
-            'X-CSRFToken': csrfToken,
-            'X-Requested-With': 'XMLHttpRequest',
-            'Content-Type': 'application/x-www-form-urlencoded'
-          },
-          body: new URLSearchParams({ question: question })
-        })
-          .then(response => response.json())
-          .then(data => {
-            chatBox.innerHTML = data.html;
-            chatBox.scrollTop = chatBox.scrollHeight;
+          // Disable form during submission
+          form.querySelector("button").disabled = true;
+          input.disabled = true;
+
+          fetch("", {
+            method: "POST",
+            headers: {
+              "X-CSRFToken": csrfToken,
+              "X-Requested-With": "XMLHttpRequest",
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({ question: question }),
           })
-          .catch(error => console.error('Error:', error));
+            .then((response) => {
+              if (!response.ok) throw new Error("Network response was not ok");
+              return response.json();
+            })
+            .then((data) => {
+              chatBox.innerHTML = data.html;
+              chatBox.scrollTop = chatBox.scrollHeight;
+              // Re-enable form
+              form.querySelector("button").disabled = false;
+              input.disabled = false;
+              input.value = "";
+              input.focus();
+            })
+            .catch((error) => {
+              console.error("Error:", error);
+              alert("An error occurred. Please try again.");
+              // Re-enable form on error
+              form.querySelector("button").disabled = false;
+              input.disabled = false;
+            });
+        });
 
-        input.value = '';
+        // Auto-resize textarea
+        input.addEventListener("input", function () {
+          this.style.height = "auto";
+          this.style.height = `${this.scrollHeight}px`;
+        });
       });
-    });
-  </script>
-</body>
+    </script>
+  </body>
 </html>
