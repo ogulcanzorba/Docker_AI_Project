@@ -14,6 +14,18 @@
       integrity="sha512-iecdLmaskl7CVkqkXNQ/ZH/XLlvWZOJyj7Yy7tcenmpD1ypASozpmT/E0iPtmFIB46ZmdtAc9eNBvH0H/ZpiBw=="
       crossorigin="anonymous"
     />
+    <style>
+      .loading {
+        display: none;
+        font-size: 0.9rem;
+        color: #718096;
+        text-align: center;
+        margin-top: 1rem;
+      }
+      .error {
+        color: #e53e3e;
+      }
+    </style>
   </head>
 
   <body>
@@ -49,17 +61,19 @@
         </div>
         <div class="card-body">
           <div class="messages-container" id="chat-box">
-            {% include "partials/lecture_chat.html" %} {% if not chat_history %}
+            {% include "partials/lecture_chat.html" %}
+            {% if not chat_history %}
             <p class="no-messages">
-              {% if lecture_name == 'networking' %} Tip: Ask about TCP/IP, OSI
-              model, routing, or network security. For data structures, try
-              Algorithms and Data Structures. {% elif lecture_name ==
-              'operating_systems' %} Tip: Ask about processes, memory
-              management, or scheduling. For networking, try Networking. {% else
-              %} Tip: Ask about sorting, searching, or data structures like hash
-              tables. For networking or OS, try those lectures. {% endif %}
+              {% if lecture_name == 'networking' %}
+                Tip: Ask about TCP/IP, OSI model, routing, or network security. For data structures, try Algorithms and Data Structures.
+              {% elif lecture_name == 'operating_systems' %}
+                Tip: Ask about processes, memory management, or scheduling. For networking, try Networking.
+              {% else %}
+                Tip: Ask about sorting, searching, or data structures like hash tables. For networking or OS, try those lectures.
+              {% endif %}
             </p>
             {% endif %}
+            <div class="loading" id="loading">Loading...</div>
           </div>
           <div class="message-input">
             <form method="post" id="chat-form">
@@ -85,9 +99,8 @@
         const form = document.getElementById("chat-form");
         const input = document.getElementById("user-question");
         const chatBox = document.getElementById("chat-box");
-        const csrfToken = document.querySelector(
-          "[name=csrfmiddlewaretoken]"
-        ).value;
+        const loading = document.getElementById("loading");
+        const csrfToken = document.querySelector("[name=csrfmiddlewaretoken]").value;
 
         form.addEventListener("submit", function (e) {
           e.preventDefault();
@@ -95,42 +108,140 @@
           const question = input.value.trim();
           if (!question) return;
 
-          // Disable form during submission
+          // Disable form and show loading
           form.querySelector("button").disabled = true;
           input.disabled = true;
+          loading.style.display = "block";
 
-          fetch("", {
-            method: "POST",
-            headers: {
-              "X-CSRFToken": csrfToken,
-              "X-Requested-With": "XMLHttpRequest",
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
-            body: new URLSearchParams({ question: question }),
-          })
-            .then((response) => {
-              if (!response.ok) throw new Error("Network response was not ok");
-              return response.json();
+          // Add user's message
+          const userMessage = document.createElement("div");
+          userMessage.className = "message-box right";
+          userMessage.innerHTML = `<p>${question}</p>`;
+          chatBox.appendChild(userMessage);
+
+          // Create bot message container
+          const botMessage = document.createElement("div");
+          botMessage.className = "message-box left";
+          botMessage.innerHTML = "";
+          chatBox.appendChild(botMessage);
+
+          chatBox.scrollTop = chatBox.scrollHeight;
+
+          // Check for off-topic questions
+          const offTopicKeywords = {
+            networking: ['hash table', 'array', 'linked list', 'tree', 'graph', 'sorting', 'searching', 'process', 'memory management', 'file system', 'scheduling', 'virtualization'],
+            operating_systems: ['hash table', 'array', 'linked list', 'tree', 'graph', 'sorting', 'searching', 'tcp', 'udp', 'ip', 'dns', 'routing', 'switching', 'network security', 'cable', 'coax', 'ethernet', 'wifi', 'protocol'],
+            algorithms_data_structures: ['tcp', 'udp', 'ip', 'dns', 'routing', 'switching', 'network security', 'cable', 'coax', 'ethernet', 'wifi', 'protocol', 'process', 'memory management', 'file system', 'scheduling', 'virtualization']
+          };
+          const lectureName = "{{ lecture_name }}";
+          const isOffTopic = offTopicKeywords[lectureName]?.some(keyword => question.toLowerCase().includes(keyword));
+
+          if (isOffTopic) {
+            // Handle off-topic via AJAX
+            fetch("", {
+              method: "POST",
+              headers: {
+                "X-CSRFToken": csrfToken,
+                "X-Requested-With": "XMLHttpRequest",
+                "Content-Type": "application/x-www-form-urlencoded"
+              },
+              body: new URLSearchParams({ question: question })
             })
-            .then((data) => {
-              chatBox.innerHTML = data.html;
-              chatBox.scrollTop = chatBox.scrollHeight;
-              // Re-enable form
-              form.querySelector("button").disabled = false;
-              input.disabled = false;
-              input.value = "";
-              input.focus();
+              .then(response => {
+                if (!response.ok) throw new Error("Network response was not ok");
+                return response.json();
+              })
+              .then(data => {
+                chatBox.innerHTML = data.html;
+                chatBox.scrollTop = chatBox.scrollHeight;
+              })
+              .catch(error => {
+                botMessage.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`;
+                console.error("Error:", error);
+              })
+              .finally(() => {
+                loading.style.display = "none";
+                form.querySelector("button").disabled = false;
+                input.disabled = false;
+                input.value = "";
+                input.focus();
+              });
+          } else {
+            // Store question and initiate streaming
+            fetch("", {
+              method: "POST",
+              headers: {
+                "X-CSRFToken": csrfToken,
+                "X-Requested-With": "XMLHttpRequest",
+                "Content-Type": "application/x-www-form-urlencoded"
+              },
+              body: new URLSearchParams({ question: question })
             })
-            .catch((error) => {
-              console.error("Error:", error);
-              alert("An error occurred. Please try again.");
-              // Re-enable form on error
-              form.querySelector("button").disabled = false;
-              input.disabled = false;
-            });
+              .then(response => {
+                if (!response.ok) throw new Error("Failed to store question");
+                // Connect to streaming endpoint
+                const source = new EventSource("{% url 'stream_lecture_response' lecture_name=lecture_name %}");
+
+                source.onmessage = function (event) {
+                  const data = JSON.parse(event.data);
+                  if (data.chunk) {
+                    botMessage.innerHTML += data.chunk;
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                  } else if (data.done) {
+                    source.close();
+                    // Refresh chat history
+                    fetch("", {
+                      method: "POST",
+                      headers: {
+                        "X-CSRFToken": csrfToken,
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Content-Type": "application/x-www-form-urlencoded"
+                      },
+                      body: new URLSearchParams({ question: question })
+                    })
+                      .then(response => response.json())
+                      .then(data => {
+                        chatBox.innerHTML = data.html;
+                        chatBox.scrollTop = chatBox.scrollHeight;
+                      })
+                      .catch(error => {
+                        botMessage.innerHTML += `<p class="error">Error refreshing chat: ${error.message}</p>`;
+                        console.error("Error:", error);
+                      })
+                      .finally(() => {
+                        loading.style.display = "none";
+                        form.querySelector("button").disabled = false;
+                        input.disabled = false;
+                        input.value = "";
+                        input.focus();
+                      });
+                  } else if (data.error) {
+                    botMessage.innerHTML = `<p class="error">${data.error}</p>`;
+                    source.close();
+                    loading.style.display = "none";
+                    form.querySelector("button").disabled = false;
+                    input.disabled = false;
+                  }
+                };
+
+                source.onerror = function () {
+                  botMessage.innerHTML = `<p class="error">Streaming error. Please try again.</p>`;
+                  source.close();
+                  loading.style.display = "none";
+                  form.querySelector("button").disabled = false;
+                  input.disabled = false;
+                };
+              })
+              .catch(error => {
+                botMessage.innerHTML = `<p class="error">Failed to initiate stream: ${error.message}</p>`;
+                loading.style.display = "none";
+                form.querySelector("button").disabled = false;
+                input.disabled = false;
+                console.error("Error:", error);
+              });
+          }
         });
 
-        // Auto-resize textarea
         input.addEventListener("input", function () {
           this.style.height = "auto";
           this.style.height = `${this.scrollHeight}px`;
