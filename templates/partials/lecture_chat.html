@@ -1,12 +1,12 @@
-{% for chat in chat_history %}
-  {% if chat.user_input %}
+{% for message in chat_history %}
+  {% if message.user_input %}
     <div class="message-box right">
-      <p>{{ chat.user_input|safe }}</p>
+      <p>{{ message.user_input }}</p>
     </div>
   {% endif %}
-  {% if chat.bot_response %}
+  {% if message.bot_response %}
     <div class="message-box left">
-      {{ chat.bot_response|safe }}
+      <p>{{ message.bot_response }}</p>
     </div>
   {% endif %}
 {% endfor %}

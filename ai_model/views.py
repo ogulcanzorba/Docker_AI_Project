@@ -7,10 +7,15 @@ from .forms import UserLoginForm
 from .models import ChatHistory
 from django.template.loader import render_to_string
 from django.http import JsonResponse, StreamingHttpResponse
+from django.core.cache import cache
 import os
 import requests
 import json
 import logging
+import hashlib
+import time
+from collections import Counter
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +50,26 @@ def lecture_view(request, lecture_name):
 
     config = lecture_config.get(lecture_name)
     if not config:
+        logger.error(f"Lecture not found: {lecture_name}")
         return render(request, '404.html', {'error': 'Lecture not found'}, status=404)
 
-    chat_history = ChatHistory.objects.filter(
-        user=request.user, lecture=config['lecture_id']
-    ).order_by('created_at')
+    start_time = time.time()
+    cache_key = f'chat_history:{request.user.id}:{lecture_name}'
+    cached_history = cache.get(cache_key)
+    if cached_history:
+        logger.info(f"Cache hit for {cache_key}, time: {time.time() - start_time:.3f}s")
+        chat_history = cached_history
+    else:
+        logger.info(f"Cache miss for {cache_key}, querying SQLite")
+        chat_history = ChatHistory.objects.filter(
+            user=request.user, lecture=config['lecture_id']
+        ).order_by('created_at')
+        cache.set(cache_key, list(chat_history), timeout=3600)
+        logger.info(f"Cached {cache_key}, time: {time.time() - start_time:.3f}s")
 
     if request.method == "POST":
         user_input = request.POST.get("question", "").lower()
+        logger.info(f"Received question: {user_input}")
 
         off_topic_responses = {
             'networking': {
@@ -73,6 +90,7 @@ def lecture_view(request, lecture_name):
         is_ajax = request.headers.get("x-requested-with") == "XMLHttpRequest"
 
         if off_topic_config and any(keyword in user_input for keyword in off_topic_config['keywords']):
+            logger.info(f"Off-topic question detected: {user_input}")
             bot_response = off_topic_config['response']
             ChatHistory.objects.create(
                 user=request.user,
@@ -80,16 +98,20 @@ def lecture_view(request, lecture_name):
                 bot_response=bot_response,
                 lecture=config['lecture_id']
             )
+            cache.delete(cache_key)
+            logger.info(f"Invalidated cache: {cache_key}")
+            chat_history = ChatHistory.objects.filter(
+                user=request.user, lecture=config['lecture_id']
+            ).order_by('created_at')
+            cache.set(cache_key, list(chat_history), timeout=3600)
+            logger.info(f"Re-cached {cache_key}")
             if is_ajax:
-                chat_history = ChatHistory.objects.filter(
-                    user=request.user, lecture=config['lecture_id']
-                ).order_by('created_at')
                 html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history})
                 return JsonResponse({'html': html})
         else:
-            # Store question in session for streaming
             request.session['last_question'] = user_input
             request.session.modified = True
+            logger.info(f"Stored question in session: {user_input}")
             if is_ajax:
                 chat_history = ChatHistory.objects.filter(
                     user=request.user, lecture=config['lecture_id']
@@ -100,7 +122,7 @@ def lecture_view(request, lecture_name):
     return render(request, config['template'], {
         "chat_history": chat_history,
         "lecture_name": lecture_name,
-        "lecture_title": lecture_name.replace('_', ' ').title()
+        "lecture_title": lecture_name.replace('_', ' ').title(),
     })
 
 @login_required
@@ -122,20 +144,91 @@ def stream_lecture_response(request, lecture_name):
 
     config = lecture_config.get(lecture_name)
     if not config:
+        logger.error(f"Stream lecture not found: {lecture_name}")
         def error_stream():
             yield f"data: {json.dumps({'error': 'Lecture not found'})}\n\n"
         return StreamingHttpResponse(error_stream(), content_type="text/event-stream")
 
-    # Get question from POST or session
     user_input = request.POST.get("question", request.session.get('last_question', "")).lower()
     if not user_input:
+        logger.error("No question provided for streaming")
         def error_stream():
             yield f"data: {json.dumps({'error': 'No question provided'})}\n\n"
         return StreamingHttpResponse(error_stream(), content_type="text/event-stream")
 
+    # Helper function to extract keywords
+    def extract_keywords(text):
+        # Remove punctuation and split into words
+        words = re.findall(r'\b\w+\b', text.lower())
+        # Remove common stop words (basic list for simplicity)
+        stop_words = {'what', 'is', 'a', 'does', 'the', 'mean', 'in', 'and', 'or', 'to'}
+        keywords = [word for word in words if word not in stop_words and len(word) > 2]
+        return set(keywords)
+
+    # Helper function to compute keyword overlap
+    def keyword_overlap(keywords1, keywords2):
+        if not keywords1 or not keywords2:
+            return 0.0
+        intersection = len(keywords1 & keywords2)
+        union = len(keywords1 | keywords2)
+        return intersection / union if union > 0 else 0.0
+
+    # Time model response retrieval
+    start_time = time.time()
+    normalized_question = user_input.lower().strip()
+    cache_key = f'model_response:{hashlib.md5(normalized_question.encode()).hexdigest()}'
+    cached_response = cache.get(cache_key)
+    logger.info(f"Checked exact cache for {cache_key}: {'Hit' if cached_response else 'Miss'}, time: {time.time() - start_time:.3f}s")
+
     chat_history = ChatHistory.objects.filter(
         user=request.user, lecture=config['lecture_id']
     ).order_by('created_at')
+
+    # Check for semantically similar questions
+    if not cached_response:
+        current_keywords = extract_keywords(user_input)
+        keyword_cache_key = f'question_keywords:{lecture_name}'
+        keyword_map = cache.get(keyword_cache_key, {})
+        
+        for prev_question, prev_cache_key in keyword_map.items():
+            prev_keywords = extract_keywords(prev_question)
+            similarity = keyword_overlap(current_keywords, prev_keywords)
+            logger.info(f"Similarity between '{user_input}' and '{prev_question}': {similarity:.2f}")
+            if similarity >= 0.65:  
+                cached_response = cache.get(prev_cache_key)
+                if cached_response:
+                    logger.info(f"Semantic cache hit for similar question: {prev_question}")
+                    cache_key = prev_cache_key
+                    break
+
+    if cached_response:
+        logger.info(f"Streaming cached response for {normalized_question}")
+        ChatHistory.objects.create(
+            user=request.user,
+            user_input=user_input,
+            bot_response=cached_response,
+            lecture=config['lecture_id']
+        )
+        chat_cache_key = f'chat_history:{request.user.id}:{lecture_name}'
+        cache.delete(chat_cache_key)
+        logger.info(f"Invalidated cache: {chat_cache_key}")
+        def stream_cached_response():
+            words = cached_response.split()
+            chunk_size = 10
+            for i in range(0, len(words), chunk_size):
+                chunk = ' '.join(words[i:i + chunk_size])
+                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                time.sleep(0.1)
+            yield f"data: {json.dumps({'done': True})}\n\n"
+        return StreamingHttpResponse(stream_cached_response(), content_type="text/event-stream")
+
+    # Update keyword map for new question
+    current_keywords = extract_keywords(user_input)
+    keyword_cache_key = f'question_keywords:{lecture_name}'
+    keyword_map = cache.get(keyword_cache_key, {})
+    keyword_map[normalized_question] = cache_key
+    cache.set(keyword_cache_key, keyword_map, timeout=86400)
+    logger.info(f"Updated keyword map for {lecture_name}")
 
     prompt_path = os.path.join("prompts", config['prompt_file'])
     try:
@@ -177,12 +270,18 @@ def stream_lecture_response(request, lecture_name):
                         full_response += chunk
                         yield f"data: {json.dumps({'chunk': chunk})}\n\n"
                         if json_data.get("done", False):
+                            logger.info(f"Saving response for {user_input}, time: {time.time() - start_time:.3f}s")
                             ChatHistory.objects.create(
                                 user=request.user,
                                 user_input=user_input,
                                 bot_response=full_response,
                                 lecture=config['lecture_id']
                             )
+                            cache.set(cache_key, full_response, timeout=86400)
+                            logger.info(f"Cached response: {cache_key}")
+                            chat_cache_key = f'chat_history:{request.user.id}:{lecture_name}'
+                            cache.delete(chat_cache_key)
+                            logger.info(f"Invalidated cache: {chat_cache_key}")
                             yield f"data: {json.dumps({'done': True})}\n\n"
                     except json.JSONDecodeError as e:
                         logger.error(f"JSON decode error: {str(e)}")
@@ -191,6 +290,7 @@ def stream_lecture_response(request, lecture_name):
             logger.error(f"Ollama API error: {str(e)}")
             yield f"data: {json.dumps({'error': 'Failed to connect to AI service'})}\n\n"
 
+    logger.info(f"Streaming live response for {user_input}")
     return StreamingHttpResponse(
         stream_response(),
         content_type="text/event-stream"

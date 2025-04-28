@@ -1,26 +1,54 @@
-version: '3.9'
-
 services:
   web:
     build: .
-    container_name: django-web
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
     ports:
       - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
     depends_on:
       - ollama
-    environment:
-      - OLLAMA_API_URL=http://ollama:11434  # Optional, if you want to use env vars
+      - redis
+    networks:
+      - app-network
 
   ollama:
-    image: ollama/ollama
-    container_name: ollama
+    image: ollama/ollama:latest
+    command: serve
+    volumes:
+      - ollama-data:/root/.ollama   # <--- change here
     ports:
       - "11434:11434"
+    networks:
+      - app-network
+
+  redis:
+    image: redis:latest
+    command: redis-server --requirepass mysecretpassword --maxmemory 100mb --maxmemory-policy volatile-lru
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+
+  celery:
+    build: .
+    image: celery:latest
+    command: celery -A ai_project worker --loglevel=info
     volumes:
-      - ollama-data:/root/.ollama  # Optional volume to persist models
+      - .:/app
+    depends_on:
+      - redis
+      - ollama
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - app-network
 
 volumes:
-  ollama-data:
+  ollama-data:   # <--- point to the existing volume
+
+networks:
+  app-network:
+    driver: bridge

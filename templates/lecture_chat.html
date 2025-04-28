@@ -108,21 +108,21 @@
           const question = input.value.trim();
           if (!question) return;
 
-          // Disable form and show loading
+          // Show loading and disable input
           form.querySelector("button").disabled = true;
           input.disabled = true;
           loading.style.display = "block";
 
-          // Add user's message
+          // Display user message
           const userMessage = document.createElement("div");
           userMessage.className = "message-box right";
           userMessage.innerHTML = `<p>${question}</p>`;
           chatBox.appendChild(userMessage);
 
-          // Create bot message container
+          // Prepare bot message container
           const botMessage = document.createElement("div");
           botMessage.className = "message-box left";
-          botMessage.innerHTML = "";
+          botMessage.innerHTML = "<p></p>";
           chatBox.appendChild(botMessage);
 
           chatBox.scrollTop = chatBox.scrollHeight;
@@ -136,9 +136,41 @@
           const lectureName = "{{ lecture_name }}";
           const isOffTopic = offTopicKeywords[lectureName]?.some(keyword => question.toLowerCase().includes(keyword));
 
+          function refreshChatHistory() {
+            fetch("{% url 'lecture' lecture_name=lecture_name %}", {
+              method: "POST",
+              headers: {
+                "X-CSRFToken": csrfToken,
+                "X-Requested-With": "XMLHttpRequest",
+                "Content-Type": "application/x-www-form-urlencoded"
+              },
+              body: new URLSearchParams({ question: question })
+            })
+              .then(response => {
+                if (!response.ok) throw new Error("Failed to refresh chat");
+                return response.json();
+              })
+              .then(data => {
+                chatBox.innerHTML = data.html;
+                chatBox.scrollTop = chatBox.scrollHeight;
+              })
+              .catch(error => {
+                botMessage.querySelector("p").innerHTML = `Error refreshing chat: ${error.message}`;
+                botMessage.className += " error";
+                console.error("Error:", error);
+              })
+              .finally(() => {
+                loading.style.display = "none";
+                form.querySelector("button").disabled = false;
+                input.disabled = false;
+                input.value = "";
+                input.focus();
+              });
+          }
+
           if (isOffTopic) {
-            // Handle off-topic via AJAX
-            fetch("", {
+            // Handle off-topic via POST
+            fetch("{% url 'lecture' lecture_name=lecture_name %}", {
               method: "POST",
               headers: {
                 "X-CSRFToken": csrfToken,
@@ -156,7 +188,8 @@
                 chatBox.scrollTop = chatBox.scrollHeight;
               })
               .catch(error => {
-                botMessage.innerHTML = `<p class="error">An error occurred: ${error.message}</p>`;
+                botMessage.querySelector("p").innerHTML = `Error: ${error.message}`;
+                botMessage.className += " error";
                 console.error("Error:", error);
               })
               .finally(() => {
@@ -167,8 +200,8 @@
                 input.focus();
               });
           } else {
-            // Store question and initiate streaming
-            fetch("", {
+            // Handle on-topic via streaming
+            fetch("{% url 'lecture' lecture_name=lecture_name %}", {
               method: "POST",
               headers: {
                 "X-CSRFToken": csrfToken,
@@ -178,62 +211,47 @@
               body: new URLSearchParams({ question: question })
             })
               .then(response => {
-                if (!response.ok) throw new Error("Failed to store question");
-                // Connect to streaming endpoint
+                if (!response.ok) throw new Error("Failed to initiate question");
                 const source = new EventSource("{% url 'stream_lecture_response' lecture_name=lecture_name %}");
 
+                let fullResponse = "";
                 source.onmessage = function (event) {
-                  const data = JSON.parse(event.data);
-                  if (data.chunk) {
-                    botMessage.innerHTML += data.chunk;
-                    chatBox.scrollTop = chatBox.scrollHeight;
-                  } else if (data.done) {
-                    source.close();
-                    // Refresh chat history
-                    fetch("", {
-                      method: "POST",
-                      headers: {
-                        "X-CSRFToken": csrfToken,
-                        "X-Requested-With": "XMLHttpRequest",
-                        "Content-Type": "application/x-www-form-urlencoded"
-                      },
-                      body: new URLSearchParams({ question: question })
-                    })
-                      .then(response => response.json())
-                      .then(data => {
-                        chatBox.innerHTML = data.html;
-                        chatBox.scrollTop = chatBox.scrollHeight;
-                      })
-                      .catch(error => {
-                        botMessage.innerHTML += `<p class="error">Error refreshing chat: ${error.message}</p>`;
-                        console.error("Error:", error);
-                      })
-                      .finally(() => {
-                        loading.style.display = "none";
-                        form.querySelector("button").disabled = false;
-                        input.disabled = false;
-                        input.value = "";
-                        input.focus();
-                      });
-                  } else if (data.error) {
-                    botMessage.innerHTML = `<p class="error">${data.error}</p>`;
-                    source.close();
-                    loading.style.display = "none";
-                    form.querySelector("button").disabled = false;
-                    input.disabled = false;
+                  try {
+                    const data = JSON.parse(event.data);
+                    if (data.chunk) {
+                      fullResponse += data.chunk;
+                      botMessage.querySelector("p").innerHTML = fullResponse;
+                      chatBox.scrollTop = chatBox.scrollHeight;
+                    } else if (data.done) {
+                      source.close();
+                      refreshChatHistory();
+                    } else if (data.error) {
+                      botMessage.querySelector("p").innerHTML = data.error;
+                      botMessage.className += " error";
+                      source.close();
+                      loading.style.display = "none";
+                      form.querySelector("button").disabled = false;
+                      input.disabled = false;
+                      input.focus();
+                    }
+                  } catch (e) {
+                    console.error("Parse error:", e);
                   }
                 };
 
                 source.onerror = function () {
-                  botMessage.innerHTML = `<p class="error">Streaming error. Please try again.</p>`;
+                  botMessage.querySelector("p").innerHTML = "Streaming error. Please try again.";
+                  botMessage.className += " error";
                   source.close();
                   loading.style.display = "none";
                   form.querySelector("button").disabled = false;
                   input.disabled = false;
+                  input.focus();
                 };
               })
               .catch(error => {
-                botMessage.innerHTML = `<p class="error">Failed to initiate stream: ${error.message}</p>`;
+                botMessage.querySelector("p").innerHTML = `Error initiating stream: ${error.message}`;
+                botMessage.className += " error";
                 loading.style.display = "none";
                 form.querySelector("button").disabled = false;
                 input.disabled = false;
