@@ -1,0 +1,105 @@
+body {
+  margin: 0;
+  padding: 0;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background-color: #f4f6f8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+
+.form_container {
+  background-color: white;
+  padding: 40px;
+  border-radius: 16px;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+  width: 100%;
+  max-width: 400px;
+}
+
+.form_title {
+  text-align: center;
+  margin-bottom: 24px;
+  font-size: 28px;
+  color: #333;
+}
+
+.input_group {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.input_group label {
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: #555;
+}
+
+.input_group input {
+  padding: 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: border-color 0.3s;
+}
+
+.input_group input:focus {
+  border-color: #007bff;
+  outline: none;
+}
+
+.submit_btn {
+  width: 100%;
+  padding: 12px;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.3s;
+}
+
+.submit_btn:hover {
+  background-color: #0056b3;
+}
+
+.switch_text {
+  text-align: center;
+  margin-top: 20px;
+  font-size: 14px;
+  color: #666;
+}
+
+.switch_text a {
+  color: #007bff;
+  text-decoration: none;
+}
+
+.switch_text a:hover {
+  text-decoration: underline;
+}
+
+.messages {
+  padding: 10px;
+  list-style-type: none;
+  margin: 0 0 15px 0;
+}
+
+.messages li {
+  padding: 10px;
+  margin-bottom: 5px;
+  border-radius: 5px;
+}
+
+.messages li.success {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.messages li.error {
+  background-color: #f8d7da;
+  color: #721c24;
+}
