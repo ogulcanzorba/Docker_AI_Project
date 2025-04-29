@@ -9,4 +9,5 @@ urlpatterns = [
     path('signup/', views.signup, name='signup'),
     path('lecture/<str:lecture_name>/', views.lecture_view, name='lecture'),
     path('lecture/<str:lecture_name>/stream/', views.stream_lecture_response, name='stream_lecture_response'),
+    path('lecture/<str:lecture_name>/quiz/', views.generate_quiz_view, name='generate_quiz'),
 ]

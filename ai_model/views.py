@@ -4,7 +4,7 @@ from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from .forms import UserLoginForm
-from .models import ChatHistory
+from .models import ChatHistory, Quiz
 from django.template.loader import render_to_string
 from django.http import JsonResponse, StreamingHttpResponse
 from django.core.cache import cache
@@ -16,6 +16,9 @@ import hashlib
 import time
 from collections import Counter
 import re
+from .tasks import generate_quiz
+from celery.result import AsyncResult
+
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +70,9 @@ def lecture_view(request, lecture_name):
         cache.set(cache_key, list(chat_history), timeout=3600)
         logger.info(f"Cached {cache_key}, time: {time.time() - start_time:.3f}s")
 
+    # Fetch quizzes for the lecture
+    quizzes = Quiz.objects.filter(user=request.user, lecture=lecture_name).order_by('created_at')
+
     if request.method == "POST":
         user_input = request.POST.get("question", "").lower()
         logger.info(f"Received question: {user_input}")
@@ -106,7 +112,7 @@ def lecture_view(request, lecture_name):
             cache.set(cache_key, list(chat_history), timeout=3600)
             logger.info(f"Re-cached {cache_key}")
             if is_ajax:
-                html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history})
+                html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history, "quizzes": quizzes})
                 return JsonResponse({'html': html})
         else:
             request.session['last_question'] = user_input
@@ -116,11 +122,12 @@ def lecture_view(request, lecture_name):
                 chat_history = ChatHistory.objects.filter(
                     user=request.user, lecture=config['lecture_id']
                 ).order_by('created_at')
-                html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history})
+                html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history, "quizzes": quizzes})
                 return JsonResponse({'html': html})
 
     return render(request, config['template'], {
         "chat_history": chat_history,
+        "quizzes": quizzes,
         "lecture_name": lecture_name,
         "lecture_title": lecture_name.replace('_', ' ').title(),
     })
@@ -156,16 +163,12 @@ def stream_lecture_response(request, lecture_name):
             yield f"data: {json.dumps({'error': 'No question provided'})}\n\n"
         return StreamingHttpResponse(error_stream(), content_type="text/event-stream")
 
-    # Helper function to extract keywords
     def extract_keywords(text):
-        # Remove punctuation and split into words
         words = re.findall(r'\b\w+\b', text.lower())
-        # Remove common stop words (basic list for simplicity)
         stop_words = {'what', 'is', 'a', 'does', 'the', 'mean', 'in', 'and', 'or', 'to'}
         keywords = [word for word in words if word not in stop_words and len(word) > 2]
         return set(keywords)
 
-    # Helper function to compute keyword overlap
     def keyword_overlap(keywords1, keywords2):
         if not keywords1 or not keywords2:
             return 0.0
@@ -173,7 +176,6 @@ def stream_lecture_response(request, lecture_name):
         union = len(keywords1 | keywords2)
         return intersection / union if union > 0 else 0.0
 
-    # Time model response retrieval
     start_time = time.time()
     normalized_question = user_input.lower().strip()
     cache_key = f'model_response:{hashlib.md5(normalized_question.encode()).hexdigest()}'
@@ -184,7 +186,6 @@ def stream_lecture_response(request, lecture_name):
         user=request.user, lecture=config['lecture_id']
     ).order_by('created_at')
 
-    # Check for semantically similar questions
     if not cached_response:
         current_keywords = extract_keywords(user_input)
         keyword_cache_key = f'question_keywords:{lecture_name}'
@@ -194,7 +195,7 @@ def stream_lecture_response(request, lecture_name):
             prev_keywords = extract_keywords(prev_question)
             similarity = keyword_overlap(current_keywords, prev_keywords)
             logger.info(f"Similarity between '{user_input}' and '{prev_question}': {similarity:.2f}")
-            if similarity >= 0.65:  
+            if similarity >= 0.6:
                 cached_response = cache.get(prev_cache_key)
                 if cached_response:
                     logger.info(f"Semantic cache hit for similar question: {prev_question}")
@@ -222,7 +223,6 @@ def stream_lecture_response(request, lecture_name):
             yield f"data: {json.dumps({'done': True})}\n\n"
         return StreamingHttpResponse(stream_cached_response(), content_type="text/event-stream")
 
-    # Update keyword map for new question
     current_keywords = extract_keywords(user_input)
     keyword_cache_key = f'question_keywords:{lecture_name}'
     keyword_map = cache.get(keyword_cache_key, {})
@@ -257,7 +257,7 @@ def stream_lecture_response(request, lecture_name):
                 "http://ollama:11434/api/generate",
                 json=data,
                 stream=True,
-                timeout=30
+                timeout=60
             )
             response.raise_for_status()
 
@@ -296,6 +296,36 @@ def stream_lecture_response(request, lecture_name):
         content_type="text/event-stream"
     )
 
+@login_required
+def generate_quiz_view(request, lecture_name):
+    lecture_config = {
+        'algorithms_data_structures': {
+            'prompt_file': 'algorithms_data_structures.txt',
+            'lecture_id': 'algorithms_data_structures'
+        },
+        'networking': {
+            'prompt_file': 'networking.txt',
+            'lecture_id': 'networking'
+        },
+        'operating_systems': {
+            'prompt_file': 'operating_systems.txt',
+            'lecture_id': 'operating_systems'
+        },
+    }
+
+    config = lecture_config.get(lecture_name)
+    if not config:
+        logger.error(f"Lecture not found: {lecture_name}")
+        return JsonResponse({'error': 'Lecture not found'}, status=404)
+
+    if request.method == "POST":
+        logger.info(f"Triggering quiz generation for user {request.user.id}, lecture {lecture_name}")
+        prompt_path = os.path.join("prompts", config['prompt_file'])
+        task = generate_quiz.delay(request.user.id, lecture_name, prompt_path)
+        return JsonResponse({'task_id': task.id, 'status': 'Quiz generation started'})
+    
+    return JsonResponse({'error': 'Invalid request method'}, status=400)
+
 def login_page(request):
     if request.user.is_authenticated:
         return redirect('lecture_list')
@@ -322,10 +352,7 @@ def signup(request):
         if form.is_valid():
             user = form.save()
             login(request, user)
-            messages.success(request, "Signup successful! You are now logged in.")
             return redirect('lecture_list')
-        else:
-            messages.error(request, "Signup failed. Please correct the errors below.")
     else:
         form = UserCreationForm()
     return render(request, 'signup.html', {'form': form})
@@ -333,3 +360,13 @@ def signup(request):
 def custom_logout(request):
     logout(request)
     return redirect('login')
+
+
+@login_required
+def task_status(request, task_id):
+    task = AsyncResult(task_id)
+    if task.state == 'SUCCESS':
+        return JsonResponse({'status': 'SUCCESS'})
+    elif task.state == 'FAILURE':
+        return JsonResponse({'status': 'FAILURE', 'error': str(task.result)})
+    return JsonResponse({'status': task.state})

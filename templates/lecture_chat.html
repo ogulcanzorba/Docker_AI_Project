@@ -25,6 +25,35 @@
       .error {
         color: #e53e3e;
       }
+      .quiz-container {
+        margin-top: 1rem;
+        padding: 1rem;
+        background: #f7fafc;
+        border-radius: 8px;
+      }
+      .quiz-container h3 {
+        margin-bottom: 0.5rem;
+      }
+      .quiz-container ul {
+        list-style: none;
+        padding: 0;
+      }
+      .quiz-container li {
+        margin: 0.5rem 0;
+      }
+      .quiz-generate {
+        background: #4a5568;
+        color: white;
+        padding: 0.5rem 1rem;
+        border-radius: 4px;
+        cursor: pointer;
+        margin-top: 1rem;
+        display: inline-block;
+      }
+      .quiz-generate:disabled {
+        background: #a0aec0;
+        cursor: not-allowed;
+      }
     </style>
   </head>
 
@@ -61,18 +90,21 @@
         </div>
         <div class="card-body">
           <div class="messages-container" id="chat-box">
-            {% include "partials/lecture_chat.html" %}
-            {% if not chat_history %}
-            <p class="no-messages">
-              {% if lecture_name == 'networking' %}
-                Tip: Ask about TCP/IP, OSI model, routing, or network security. For data structures, try Algorithms and Data Structures.
-              {% elif lecture_name == 'operating_systems' %}
-                Tip: Ask about processes, memory management, or scheduling. For networking, try Networking.
-              {% else %}
-                Tip: Ask about sorting, searching, or data structures like hash tables. For networking or OS, try those lectures.
-              {% endif %}
-            </p>
-            {% endif %}
+    {% include "partials/lecture_chat.html" %}
+    
+    {% if not chat_history %}
+      <p class="no-messages">
+        {% if lecture_name == 'networking' %}
+          Tip: Ask about TCP/IP, OSI model, routing, or network security. For data structures, try Algorithms and Data Structures.
+        {% elif lecture_name == 'operating_systems' %}
+          Tip: Ask about processes, memory management, or scheduling. For networking, try Networking.
+        {% elif lecture_name == 'algorithms_data_structures' %}
+          Tip: Ask about sorting, searching, or data structures like hash tables. For networking or OS, try those lectures.
+        {% else %}
+          Tip: Please select a valid lecture.
+        {% endif %}
+      </p>
+    {% endif %}
             <div class="loading" id="loading">Loading...</div>
           </div>
           <div class="message-input">
@@ -89,6 +121,9 @@
                 <i class="fas fa-paper-plane"></i> Send
               </button>
             </form>
+            <button class="quiz-generate" id="quiz-generate">
+              Generate Quiz
+            </button>
           </div>
         </div>
       </div>
@@ -98,43 +133,103 @@
       document.addEventListener("DOMContentLoaded", function () {
         const form = document.getElementById("chat-form");
         const input = document.getElementById("user-question");
+        const sendButton = form.querySelector(".button-send");
         const chatBox = document.getElementById("chat-box");
         const loading = document.getElementById("loading");
-        const csrfToken = document.querySelector("[name=csrfmiddlewaretoken]").value;
+        const quizButton = document.getElementById("quiz-generate");
+        const csrfToken = document.querySelector(
+          "[name=csrfmiddlewaretoken]"
+        ).value;
+        let isProcessing = false;
 
+        // Handle form submission
         form.addEventListener("submit", function (e) {
           e.preventDefault();
+          if (isProcessing) return;
 
           const question = input.value.trim();
           if (!question) return;
 
-          // Show loading and disable input
-          form.querySelector("button").disabled = true;
+          isProcessing = true;
           input.disabled = true;
+          sendButton.disabled = true;
+          quizButton.disabled = true;
+          sendButton.innerHTML =
+            '<i class="fas fa-spinner fa-spin"></i> Sending...';
           loading.style.display = "block";
+          loading.innerHTML = "Loading response...";
 
-          // Display user message
           const userMessage = document.createElement("div");
           userMessage.className = "message-box right";
           userMessage.innerHTML = `<p>${question}</p>`;
           chatBox.appendChild(userMessage);
+          chatBox.scrollTop = chatBox.scrollHeight;
 
-          // Prepare bot message container
           const botMessage = document.createElement("div");
           botMessage.className = "message-box left";
           botMessage.innerHTML = "<p></p>";
           chatBox.appendChild(botMessage);
 
-          chatBox.scrollTop = chatBox.scrollHeight;
-
-          // Check for off-topic questions
           const offTopicKeywords = {
-            networking: ['hash table', 'array', 'linked list', 'tree', 'graph', 'sorting', 'searching', 'process', 'memory management', 'file system', 'scheduling', 'virtualization'],
-            operating_systems: ['hash table', 'array', 'linked list', 'tree', 'graph', 'sorting', 'searching', 'tcp', 'udp', 'ip', 'dns', 'routing', 'switching', 'network security', 'cable', 'coax', 'ethernet', 'wifi', 'protocol'],
-            algorithms_data_structures: ['tcp', 'udp', 'ip', 'dns', 'routing', 'switching', 'network security', 'cable', 'coax', 'ethernet', 'wifi', 'protocol', 'process', 'memory management', 'file system', 'scheduling', 'virtualization']
+            networking: [
+              "hash table",
+              "array",
+              "linked list",
+              "tree",
+              "graph",
+              "sorting",
+              "searching",
+              "process",
+              "memory management",
+              "file system",
+              "scheduling",
+              "virtualization",
+            ],
+            operating_systems: [
+              "hash table",
+              "array",
+              "linked list",
+              "tree",
+              "graph",
+              "sorting",
+              "searching",
+              "tcp",
+              "udp",
+              "ip",
+              "dns",
+              "routing",
+              "switching",
+              "network security",
+              "cable",
+              "coax",
+              "ethernet",
+              "wifi",
+              "protocol",
+            ],
+            algorithms_data_structures: [
+              "tcp",
+              "udp",
+              "ip",
+              "dns",
+              "routing",
+              "switching",
+              "network security",
+              "cable",
+              "coax",
+              "ethernet",
+              "wifi",
+              "protocol",
+              "process",
+              "memory management",
+              "file system",
+              "scheduling",
+              "virtualization",
+            ],
           };
           const lectureName = "{{ lecture_name }}";
-          const isOffTopic = offTopicKeywords[lectureName]?.some(keyword => question.toLowerCase().includes(keyword));
+          const isOffTopic = offTopicKeywords[lectureName]?.some((keyword) =>
+            question.toLowerCase().includes(keyword)
+          );
 
           function refreshChatHistory() {
             fetch("{% url 'lecture' lecture_name=lecture_name %}", {
@@ -142,77 +237,91 @@
               headers: {
                 "X-CSRFToken": csrfToken,
                 "X-Requested-With": "XMLHttpRequest",
-                "Content-Type": "application/x-www-form-urlencoded"
+                "Content-Type": "application/x-www-form-urlencoded",
               },
-              body: new URLSearchParams({ question: question })
+              body: new URLSearchParams({ question: question }),
             })
-              .then(response => {
+              .then((response) => {
                 if (!response.ok) throw new Error("Failed to refresh chat");
                 return response.json();
               })
-              .then(data => {
+              .then((data) => {
                 chatBox.innerHTML = data.html;
                 chatBox.scrollTop = chatBox.scrollHeight;
               })
-              .catch(error => {
-                botMessage.querySelector("p").innerHTML = `Error refreshing chat: ${error.message}`;
+              .catch((error) => {
+                botMessage.querySelector(
+                  "p"
+                ).innerHTML = `Error refreshing chat: ${error.message}`;
                 botMessage.className += " error";
                 console.error("Error:", error);
               })
               .finally(() => {
-                loading.style.display = "none";
-                form.querySelector("button").disabled = false;
+                isProcessing = false;
                 input.disabled = false;
+                sendButton.disabled = false;
+                quizButton.disabled = false;
+                sendButton.innerHTML =
+                  '<i class="fas fa-paper-plane"></i> Send';
+                loading.style.display = "none";
                 input.value = "";
                 input.focus();
               });
           }
 
           if (isOffTopic) {
-            // Handle off-topic via POST
             fetch("{% url 'lecture' lecture_name=lecture_name %}", {
               method: "POST",
               headers: {
                 "X-CSRFToken": csrfToken,
                 "X-Requested-With": "XMLHttpRequest",
-                "Content-Type": "application/x-www-form-urlencoded"
+                "Content-Type": "application/x-www-form-urlencoded",
               },
-              body: new URLSearchParams({ question: question })
+              body: new URLSearchParams({ question: question }),
             })
-              .then(response => {
-                if (!response.ok) throw new Error("Network response was not ok");
+              .then((response) => {
+                if (!response.ok)
+                  throw new Error("Network response was not ok");
                 return response.json();
               })
-              .then(data => {
+              .then((data) => {
                 chatBox.innerHTML = data.html;
                 chatBox.scrollTop = chatBox.scrollHeight;
               })
-              .catch(error => {
-                botMessage.querySelector("p").innerHTML = `Error: ${error.message}`;
+              .catch((error) => {
+                botMessage.querySelector(
+                  "p"
+                ).innerHTML = `Error: ${error.message}`;
                 botMessage.className += " error";
                 console.error("Error:", error);
               })
               .finally(() => {
-                loading.style.display = "none";
-                form.querySelector("button").disabled = false;
+                isProcessing = false;
                 input.disabled = false;
+                sendButton.disabled = false;
+                quizButton.disabled = false;
+                sendButton.innerHTML =
+                  '<i class="fas fa-paper-plane"></i> Send';
+                loading.style.display = "none";
                 input.value = "";
                 input.focus();
               });
           } else {
-            // Handle on-topic via streaming
             fetch("{% url 'lecture' lecture_name=lecture_name %}", {
               method: "POST",
               headers: {
                 "X-CSRFToken": csrfToken,
                 "X-Requested-With": "XMLHttpRequest",
-                "Content-Type": "application/x-www-form-urlencoded"
+                "Content-Type": "application/x-www-form-urlencoded",
               },
-              body: new URLSearchParams({ question: question })
+              body: new URLSearchParams({ question: question }),
             })
-              .then(response => {
-                if (!response.ok) throw new Error("Failed to initiate question");
-                const source = new EventSource("{% url 'stream_lecture_response' lecture_name=lecture_name %}");
+              .then((response) => {
+                if (!response.ok)
+                  throw new Error("Failed to initiate question");
+                const source = new EventSource(
+                  "{% url 'stream_lecture_response' lecture_name=lecture_name %}"
+                );
 
                 let fullResponse = "";
                 source.onmessage = function (event) {
@@ -229,9 +338,13 @@
                       botMessage.querySelector("p").innerHTML = data.error;
                       botMessage.className += " error";
                       source.close();
-                      loading.style.display = "none";
-                      form.querySelector("button").disabled = false;
+                      isProcessing = false;
                       input.disabled = false;
+                      sendButton.disabled = false;
+                      quizButton.disabled = false;
+                      sendButton.innerHTML =
+                        '<i class="fas fa-paper-plane"></i> Send';
+                      loading.style.display = "none";
                       input.focus();
                     }
                   } catch (e) {
@@ -240,26 +353,118 @@
                 };
 
                 source.onerror = function () {
-                  botMessage.querySelector("p").innerHTML = "Streaming error. Please try again.";
+                  botMessage.querySelector("p").innerHTML =
+                    "Streaming error. Please try again.";
                   botMessage.className += " error";
                   source.close();
-                  loading.style.display = "none";
-                  form.querySelector("button").disabled = false;
+                  isProcessing = false;
                   input.disabled = false;
+                  sendButton.disabled = false;
+                  quizButton.disabled = false;
+                  sendButton.innerHTML =
+                    '<i class="fas fa-paper-plane"></i> Send';
+                  loading.style.display = "none";
                   input.focus();
                 };
               })
-              .catch(error => {
-                botMessage.querySelector("p").innerHTML = `Error initiating stream: ${error.message}`;
+              .catch((error) => {
+                botMessage.querySelector(
+                  "p"
+                ).innerHTML = `Error initiating stream: ${error.message}`;
                 botMessage.className += " error";
-                loading.style.display = "none";
-                form.querySelector("button").disabled = false;
+                isProcessing = false;
                 input.disabled = false;
+                sendButton.disabled = false;
+                quizButton.disabled = false;
+                sendButton.innerHTML =
+                  '<i class="fas fa-paper-plane"></i> Send';
+                loading.style.display = "none";
                 console.error("Error:", error);
               });
           }
         });
 
+        // Quiz generation
+        quizButton.addEventListener("click", function () {
+          if (isProcessing) return;
+
+          isProcessing = true;
+          input.disabled = true;
+          sendButton.disabled = true;
+          quizButton.disabled = true;
+          quizButton.innerHTML =
+            '<i class="fas fa-spinner fa-spin"></i> Generating Quiz...';
+          loading.style.display = "block";
+          loading.innerHTML = "Generating quiz...";
+
+          fetch("{% url 'generate_quiz' lecture_name=lecture_name %}", {
+            method: "POST",
+            headers: {
+              "X-CSRFToken": csrfToken,
+              "X-Requested-With": "XMLHttpRequest",
+            },
+          })
+            .then((response) => {
+              if (!response.ok)
+                throw new Error("Failed to start quiz generation");
+              return response.json();
+            })
+            .then((data) => {
+              if (data.status === "Quiz generation started") {
+                const taskId = data.task_id;
+                const pollInterval = setInterval(() => {
+                  fetch(`/lecture/${lectureName}/`, {
+                    method: "POST",
+                    headers: {
+                      "X-CSRFToken": csrfToken,
+                      "X-Requested-With": "XMLHttpRequest",
+                      "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    body: new URLSearchParams({ question: "" }),
+                  })
+                    .then((response) => response.json())
+                    .then((data) => {
+                      chatBox.innerHTML = data.html;
+                      chatBox.scrollTop = chatBox.scrollHeight;
+                      if (document.querySelector(".quiz-container")) {
+                        clearInterval(pollInterval);
+                        isProcessing = false;
+                        input.disabled = false;
+                        sendButton.disabled = false;
+                        quizButton.disabled = false;
+                        quizButton.innerHTML = "Generate Quiz";
+                        loading.style.display = "none";
+                      }
+                    })
+                    .catch((error) => {
+                      loading.innerHTML = `Error generating quiz: ${error.message}`;
+                      loading.className += " error";
+                      console.error("Error:", error);
+                      clearInterval(pollInterval);
+                      isProcessing = false;
+                      input.disabled = false;
+                      sendButton.disabled = false;
+                      quizButton.disabled = false;
+                      quizButton.innerHTML = "Generate Quiz";
+                      loading.style.display = "none";
+                    });
+                }, 1000); // Poll every 1s
+              }
+            })
+            .catch((error) => {
+              loading.innerHTML = `Error generating quiz: ${error.message}`;
+              loading.className += " error";
+              console.error("Error:", error);
+              isProcessing = false;
+              input.disabled = false;
+              sendButton.disabled = false;
+              quizButton.disabled = false;
+              quizButton.innerHTML = "Generate Quiz";
+              loading.style.display = "none";
+            });
+        });
+
+        // Auto-resize textarea
         input.addEventListener("input", function () {
           this.style.height = "auto";
           this.style.height = `${this.scrollHeight}px`;
@@ -268,3 +473,47 @@
     </script>
   </body>
 </html>
+
+<style>
+  .loading {
+    display: none;
+    font-size: 0.9rem;
+    color: #718096;
+    text-align: center;
+    margin-top: 1rem;
+  }
+  .error {
+    color: #e53e3e;
+  }
+  .quiz-container {
+    margin-top: 1rem;
+    padding: 1rem;
+    background: #f7fafc;
+    border-radius: 8px;
+    max-height: 400px; /* Limit height */
+    overflow-y: auto; /* Enable vertical scrollbar */
+  }
+  .quiz-container h3 {
+    margin-bottom: 0.5rem;
+  }
+  .quiz-container ul {
+    list-style: none;
+    padding: 0;
+  }
+  .quiz-container li {
+    margin: 0.5rem 0;
+  }
+  .quiz-generate {
+    background: #4a5568;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 1rem;
+    display: inline-block;
+  }
+  .quiz-generate:disabled {
+    background: #a0aec0;
+    cursor: not-allowed;
+  }
+</style>

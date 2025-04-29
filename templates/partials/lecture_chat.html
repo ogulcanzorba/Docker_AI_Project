@@ -1,12 +1,24 @@
-{% for message in chat_history %}
-  {% if message.user_input %}
-    <div class="message-box right">
-      <p>{{ message.user_input }}</p>
-    </div>
-  {% endif %}
-  {% if message.bot_response %}
-    <div class="message-box left">
-      <p>{{ message.bot_response }}</p>
-    </div>
-  {% endif %}
-{% endfor %}
+{% for message in chat_history %} {% if message.user_input %}
+<div class="message-box right">
+  <p>{{ message.user_input }}</p>
+</div>
+{% endif %} {% if message.bot_response %}
+<div class="message-box left">
+  <p>{{ message.bot_response }}</p>
+</div>
+{% endif %} {% endfor %} {% if quizzes %}
+<div class="quiz-container">
+  <h3>Quiz for {{ lecture_name|title }}</h3>
+  {% for quiz in quizzes %}
+  <div class="quiz-question">
+    <p><strong>{{ forloop.counter }}. {{ quiz.question }}</strong></p>
+    <ul>
+      {% for option in quiz.options %}
+      <li>{{ option }}</li>
+      {% endfor %}
+    </ul>
+    <p><em>Correct Answer: {{ quiz.correct_answer }}</em></p>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
