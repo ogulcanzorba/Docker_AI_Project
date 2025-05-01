@@ -4,6 +4,8 @@ from .models import ChatHistory, Quiz
 import requests
 import re
 import logging
+from .utils.pdf_processing import process_lecture_pdf
+from .models import Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -262,3 +264,16 @@ def generate_quiz(user_id, lecture_name, lecture_prompt_path):
     except Exception as e:
         logger.error(f"Quiz generation failed: {str(e)}")
         return {"status": "error", "error": str(e)}
+@shared_task
+def generate_transcript(user_id, lecture_name, pdf_file_path):
+    transcript_text = process_lecture_pdf(pdf_file_path)
+    if transcript_text:
+        from django.contrib.auth.models import User
+        user = User.objects.get(id=user_id)
+        Transcript.objects.create(
+            user=user,
+            lecture=lecture_name,
+            transcript_text=transcript_text,
+            pdf_file=pdf_file_path.replace(settings.MEDIA_ROOT, '')
+        )
+    return transcript_text is not None

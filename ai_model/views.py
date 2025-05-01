@@ -17,7 +17,12 @@ import time
 from collections import Counter
 import re
 from .tasks import generate_quiz
+from .tasks import generate_transcript
 from celery.result import AsyncResult
+from django.core.files.storage import FileSystemStorage
+from .utils.pdf_processing import process_lecture_pdf
+from .models import Transcript
+from django.conf import settings
 
 
 
@@ -126,10 +131,11 @@ def lecture_view(request, lecture_name):
                 ).order_by('created_at')
                 html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history, "quizzes": quizzes})
                 return JsonResponse({'html': html})
-
+    transcripts = Transcript.objects.filter(user=request.user, lecture=lecture_name).order_by('-created_at')
     return render(request, config['template'], {
         "chat_history": chat_history,
         "quizzes": quizzes,
+        "transcripts": transcripts,  # Add transcripts
         "lecture_name": lecture_name,
         "lecture_title": lecture_name.replace('_', ' ').title(),
     })
@@ -329,6 +335,52 @@ def generate_quiz_view(request, lecture_name):
     return JsonResponse({'error': 'Invalid request method'}, status=400)
 
 
+@login_required
+def upload_lecture_pdf(request, lecture_name):
+    lecture_config = {
+        'algorithms_data_structures': {'lecture_id': 'algorithms_data_structures'},
+        'networking': {'lecture_id': 'networking'},
+        'operating_systems': {'lecture_id': 'operating_systems'},
+    }
+
+    config = lecture_config.get(lecture_name)
+    if not config:
+        logger.error(f"Lecture not found: {lecture_name}")
+        return render(request, '404.html', {'error': 'Lecture not found'}, status=404)
+
+    if request.method == "POST" and request.FILES.get('pdf_file'):
+        pdf_file = request.FILES['pdf_file']
+        fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, 'lecture_pdfs'))
+        filename = fs.save(pdf_file.name, pdf_file)
+        pdf_file_path = os.path.join(settings.MEDIA_ROOT, 'lecture_pdfs', filename)
+        task = generate_transcript.delay(request.user.id, lecture_name, pdf_file_path)
+        return JsonResponse({'task_id': task.id, 'status': 'Transcript generation started'})
+
+        # Process the PDF
+        transcript_text = process_lecture_pdf(pdf_file_path)
+        if transcript_text:
+            # Save transcript to database
+            Transcript.objects.create(
+                user=request.user,
+                lecture=config['lecture_id'],
+                transcript_text=transcript_text,
+                pdf_file=f'lecture_pdfs/{filename}'
+            )
+            messages.success(request, "Transcript generated successfully!")
+        else:
+            messages.error(request, "Failed to generate transcript from PDF.")
+
+        return redirect('lecture_view', lecture_name=lecture_name)
+
+    return render(request, 'upload_pdf.html', {
+        'lecture_name': lecture_name,
+        'lecture_title': lecture_name.replace('_', ' ').title(),
+    })
+
+@login_required
+def transcript_detail(request, transcript_id):
+    transcript = Transcript.objects.get(id=transcript_id, user=request.user)
+    return render(request, 'transcript_detail.html', {'transcript': transcript})
 
 def login_page(request):
     if request.user.is_authenticated:

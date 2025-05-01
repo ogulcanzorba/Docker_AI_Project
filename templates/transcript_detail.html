@@ -1,0 +1,8 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Transcript Details</h2>
+<p><strong>Lecture:</strong> {{ transcript.lecture }}</p>
+<p><strong>Created:</strong> {{ transcript.created_at }}</p>
+<p>{{ transcript.transcript_text }}</p>
+<a href="{% url 'lecture_view' transcript.lecture %}">Back to Lecture</a>
+{% endblock %}

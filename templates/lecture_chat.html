@@ -128,6 +128,26 @@
         </div>
       </div>
     </main>
+    <h3>Transcripts</h3>
+    {% for transcript in transcripts %}
+    <div>
+        <p><strong>Created:</strong> {{ transcript.created_at }}</p>
+        <p>{{ transcript.transcript_text|truncatewords:50 }}</p>
+        <a href="{% url 'transcript_detail' transcript.id %}">View Full Transcript</a>
+    </div>
+{% empty %}
+    <p>No transcripts available. <a href="{% url 'upload_lecture_pdf' lecture_name %}">Upload PDF</a></p>
+{% endfor %}
+<!-- Existing chat and quiz content -->
+
+    <div>
+        <p><strong>Created:</strong> {{ transcript.created_at }}</p>
+        <p>{{ transcript.transcript_text|truncatewords:50 }}</p>
+
+    </div>
+
+
+<!-- Existing chat and quiz content -->
 
     <script>
       document.addEventListener("DOMContentLoaded", function () {

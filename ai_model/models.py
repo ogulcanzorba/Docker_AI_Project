@@ -16,3 +16,13 @@ class Quiz(models.Model):
     options = models.JSONField()
     correct_answer = models.TextField()
     created_at = models.DateTimeField(auto_now_add=True)
+
+class Transcript(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    lecture = models.CharField(max_length=100)  # e.g., 'algorithms_data_structures'
+    transcript_text = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    pdf_file = models.FileField(upload_to='lecture_pdfs/', null=True, blank=True)
+
+    def __str__(self):
+        return f"{self.lecture} - {self.user.username}"
