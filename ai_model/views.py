@@ -20,6 +20,8 @@ from .tasks import generate_quiz
 from celery.result import AsyncResult
 
 
+
+
 logger = logging.getLogger(__name__)
 
 @login_required
@@ -325,6 +327,8 @@ def generate_quiz_view(request, lecture_name):
         return JsonResponse({'task_id': task.id, 'status': 'Quiz generation started'})
     
     return JsonResponse({'error': 'Invalid request method'}, status=400)
+
+
 
 def login_page(request):
     if request.user.is_authenticated:
