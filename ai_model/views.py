@@ -6,6 +6,7 @@ from django.contrib import messages
 from .forms import UserLoginForm
 from .models import ChatHistory, Quiz
 from django.template.loader import render_to_string
+from django.conf import settings
 from django.http import JsonResponse, StreamingHttpResponse
 from django.core.cache import cache
 import os
@@ -22,7 +23,7 @@ from celery.result import AsyncResult
 from django.core.files.storage import FileSystemStorage
 from .utils.pdf_processing import process_lecture_pdf
 from .models import Transcript
-from django.conf import settings
+
 
 
 
@@ -336,45 +337,50 @@ def generate_quiz_view(request, lecture_name):
 
 
 @login_required
-def upload_lecture_pdf(request, lecture_name):
+def upload_lecture_pdf(request, lecture_name=None):  # Allow lecture_name to be optional
     lecture_config = {
-        'algorithms_data_structures': {'lecture_id': 'algorithms_data_structures'},
-        'networking': {'lecture_id': 'networking'},
-        'operating_systems': {'lecture_id': 'operating_systems'},
+        'algorithms_data_structures': {'lecture_id': 'algorithms_data_structures',
+                                       'title': 'Algorithms and Data Structures'},
+        'networking': {'lecture_id': 'networking', 'title': 'Networking'},
+        'operating_systems': {'lecture_id': 'operating_systems', 'title': 'Operating Systems'},
     }
 
-    config = lecture_config.get(lecture_name)
-    if not config:
-        logger.error(f"Lecture not found: {lecture_name}")
-        return render(request, '404.html', {'error': 'Lecture not found'}, status=404)
+    if request.method == "POST":
+        logger.info("POST request received for PDF upload")
+        lecture_name = request.POST.get('lecture_name')
+        if lecture_name not in lecture_config:
+            logger.error(f"Invalid lecture name: {lecture_name}")
+            messages.error(request, "Please select a valid lecture.")
+            return render(request, 'upload_pdf.html', {
+                'lecture_name': '',
+                'lecture_title': 'Select a Lecture',
+                'lecture_config': lecture_config,
+            })
+        if request.FILES.get('pdf_file'):
+            logger.info(f"PDF file received: {request.FILES['pdf_file'].name}")
+            pdf_file = request.FILES['pdf_file']
+            fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, 'lecture_pdfs'))
+            filename = fs.save(pdf_file.name, pdf_file)
+            pdf_file_path = os.path.join(settings.MEDIA_ROOT, 'lecture_pdfs', filename)
+            logger.info(f"File saved to: {pdf_file_path}")
 
-    if request.method == "POST" and request.FILES.get('pdf_file'):
-        pdf_file = request.FILES['pdf_file']
-        fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, 'lecture_pdfs'))
-        filename = fs.save(pdf_file.name, pdf_file)
-        pdf_file_path = os.path.join(settings.MEDIA_ROOT, 'lecture_pdfs', filename)
-        task = generate_transcript.delay(request.user.id, lecture_name, pdf_file_path)
-        return JsonResponse({'task_id': task.id, 'status': 'Transcript generation started'})
-
-        # Process the PDF
-        transcript_text = process_lecture_pdf(pdf_file_path)
-        if transcript_text:
-            # Save transcript to database
-            Transcript.objects.create(
-                user=request.user,
-                lecture=config['lecture_id'],
-                transcript_text=transcript_text,
-                pdf_file=f'lecture_pdfs/{filename}'
-            )
-            messages.success(request, "Transcript generated successfully!")
+            task = generate_transcript.delay(request.user.id, lecture_name, pdf_file_path)
+            logger.info(f"Task queued: {task.id}")
+            return JsonResponse({'task_id': task.id, 'status': 'Transcript generation started'})
         else:
-            messages.error(request, "Failed to generate transcript from PDF.")
+            logger.error("No PDF file provided")
+            messages.error(request, "Please select a PDF file.")
+            return render(request, 'upload_pdf.html', {
+                'lecture_name': lecture_name or '',
+                'lecture_title': lecture_config.get(lecture_name, {'title': 'Select a Lecture'})['title'],
+                'lecture_config': lecture_config,
+            })
 
-        return redirect('lecture_view', lecture_name=lecture_name)
-
+    logger.info("Rendering upload page")
     return render(request, 'upload_pdf.html', {
-        'lecture_name': lecture_name,
-        'lecture_title': lecture_name.replace('_', ' ').title(),
+        'lecture_name': lecture_name or '',
+        'lecture_title': lecture_config.get(lecture_name, {'title': 'Select a Lecture'})['title'],
+        'lecture_config': lecture_config,
     })
 
 @login_required
