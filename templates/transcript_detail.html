@@ -1,8 +1,61 @@
-{% extends 'base.html' %}
-{% block content %}
-<h2>Transcript Details</h2>
-<p><strong>Lecture:</strong> {{ transcript.lecture }}</p>
-<p><strong>Created:</strong> {{ transcript.created_at }}</p>
-<p>{{ transcript.transcript_text }}</p>
-<a href="{% url 'lecture_view' transcript.lecture %}">Back to Lecture</a>
-{% endblock %}
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Transcript - {{ transcript.lecture|title }}</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}" />
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, sans-serif;
+        background-color: #f5f7fa;
+        margin: 0;
+        padding: 0;
+      }
+      .container {
+        max-width: 800px;
+        margin: 50px auto;
+        background: white;
+        border-radius: 10px;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        padding: 30px;
+      }
+      h2 {
+        margin-top: 0;
+        font-size: 28px;
+        color: #333;
+      }
+      .meta {
+        color: #777;
+        font-size: 14px;
+        margin-bottom: 20px;
+      }
+      .transcript-content {
+        line-height: 1.6;
+        color: #444;
+        white-space: pre-wrap;
+      }
+      .back-link {
+        display: inline-block;
+        margin-top: 30px;
+        text-decoration: none;
+        color: #4a90e2;
+      }
+      .back-link:hover {
+        text-decoration: underline;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h2>Transcript - {{ transcript.lecture|title }}</h2>
+      <div class="meta">
+        Created at: {{ transcript.created_at|date:"F j, Y, H:i" }}
+      </div>
+      <div class="transcript-content">{{ transcript.transcript_text }}</div>
+      <a href="{% url 'lecture' transcript.lecture %}" class="back-link"
+        >&larr; Back to Lecture</a
+      >
+    </div>
+  </body>
+</html>

@@ -138,7 +138,7 @@
 {% empty %}
     <p>No transcripts available. <a href="{% url 'upload_lecture_pdf' lecture_name %}">Upload PDF</a></p>
 {% endfor %}
-<!-- Existing chat and quiz content -->
+
 
     <div>
         <p><strong>Created:</strong> {{ transcript.created_at }}</p>
@@ -147,7 +147,7 @@
     </div>
 
 
-<!-- Existing chat and quiz content -->
+
 
     <script>
       document.addEventListener("DOMContentLoaded", function () {
