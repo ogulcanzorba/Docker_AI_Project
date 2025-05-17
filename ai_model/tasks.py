@@ -7,9 +7,9 @@ import requests
 import re
 import logging
 from .utils.pdf_processing import process_lecture_pdf
+import os
 
 logger = logging.getLogger(__name__)
-
 
 @shared_task
 def generate_quiz(user_id, lecture_name, lecture_prompt_path):
@@ -225,25 +225,114 @@ def generate_quiz(user_id, lecture_name, lecture_prompt_path):
         logger.error(f"Quiz generation failed: {str(e)}")
         return {"status": "error", "error": str(e)}
 
+def split_text_into_chunks(text, chunk_size=2000):
+    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
+    logger.info(f"Text split into {len(chunks)} chunks")
+    return chunks
+
+def process_with_gemma(chunk, model_name='gemma3:1b'):
+    prompt = f"""
+    Summarize the following text in 50-100 words, focusing only on core technical concepts for a computer science lecture. Start with "The key concept is…" and use a concise tone. Exclude examples, anecdotes, non-technical details, introductions, or explanations. Output ONLY the summary text starting with "The key concept is…":
+
+    {chunk}
+    """
+    try:
+        response = requests.post(
+            "http://ollama:11434/api/generate",
+            json={"model": model_name, "prompt": prompt, "stream": False},
+            timeout=60
+        )
+        response.raise_for_status()
+        ollama_data = response.json()
+        chunk_text = ollama_data.get("response", "")
+        logger.info(f"Gemma response received for chunk: {chunk_text[:100]}...")
+        if not chunk_text:
+            logger.error("Empty response from Ollama for chunk")
+            raise ValueError("Empty response from Ollama")
+        return chunk_text
+    except requests.RequestException as e:
+        logger.error(f"Ollama API timeout or connection error for chunk: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error processing chunk with Gemma: {str(e)}")
+        return f"Error processing chunk: {str(e)}"
+
+def finalize_transcript(chunks_results):
+    combined = "\n".join(chunks_results)
+    final_prompt = f"""
+    Combine the following summaries into a single summary for a computer science lecture. Start with "The key concepts are…" and use a concise tone. Focus only on core technical concepts, keeping the length 200-300 words. Exclude examples, anecdotes, non-technical details, introductions, or explanations. Output ONLY the summary text starting with "The key concepts are…":
+
+    {combined}
+    """
+    try:
+        response = requests.post(
+            "http://ollama:11434/api/generate",
+            json={"model": "gemma3:1b", "prompt": final_prompt, "stream": False},
+            timeout=60
+        )
+        response.raise_for_status()
+        ollama_data = response.json()
+        final_text = ollama_data.get("response", "")
+        logger.info(f"Final summary generated: {final_text[:100]}...")
+        if not final_text:
+            logger.error("Empty response from Ollama for final summary")
+            raise ValueError("Empty response from Ollama")
+        return final_text
+    except requests.RequestException as e:
+        logger.error(f"Ollama API timeout or connection error for final summary: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error finalizing summary: {str(e)}")
+        return f"Error in final summary: {str(e)}"
 
 @shared_task
-def generate_transcript(user_id, lecture_name, pdf_file_path):
-    logger.info(f"Starting transcript generation for {pdf_file_path}")
+def generate_transcript(user, lecture, pdf_file):
+    logger.info(f"Starting summary generation for user {user}, lecture {lecture}, file {pdf_file}")
     try:
-        transcript_text = process_lecture_pdf(pdf_file_path)
+        # PDF'den metni çıkar
+        transcript_text = process_lecture_pdf(pdf_file)
         if not transcript_text:
             logger.error("No text extracted from PDF")
-            raise ValueError("No text extracted from PDF")
-        logger.info(f"Transcript generated: {transcript_text[:100]}...")
-        user = User.objects.get(id=user_id)
+            return {'status': 'error', 'message': 'No text extracted from PDF'}
+
+        # Metni chunk'lara böl
+        chunks = split_text_into_chunks(transcript_text, chunk_size=2000)
+
+        # Her chunk için özet üret
+        results = []
+        for i, chunk in enumerate(chunks):
+            logger.info(f"Processing chunk {i+1}/{len(chunks)}")
+            result = process_with_gemma(chunk, model_name='gemma3:1b')
+            results.append(result)
+
+        # Nihai özeti birleştir
+        final_summary = finalize_transcript(results)
+
+        # Özeti temizle
+        cleaned_text = " ".join(final_summary.strip().split())
+        logger.info(f"Cleaned summary: {cleaned_text[:500]}...")
+
+        # Özeti veritabanına kaydet
+        user = User.objects.get(id=user)
+        # pdf_file'ı FileField için uygun hale getir
+        pdf_file_name = os.path.basename(pdf_file) if isinstance(pdf_file, str) else pdf_file.name
         transcript = Transcript.objects.create(
             user=user,
-            lecture=lecture_name,
-            transcript_text=transcript_text,
-            pdf_file=pdf_file_path.replace(settings.MEDIA_ROOT, '')
+            lecture=lecture,
+            transcript_text=cleaned_text,
+            pdf_file=pdf_file
         )
-        logger.info(f"Transcript saved to database: ID {transcript.id}")
-        return True
-    except Exception as e:
-        logger.error(f"Task failed: {str(e)}")
+        logger.info(f"Summary saved with ID {transcript.id}")
+
+        return {
+            'status': 'success',
+            'transcript_id': transcript.id,
+            'lecture': lecture,
+            'transcript_text': cleaned_text
+        }
+    except requests.RequestException as e:
+        logger.error(f"Ollama API timeout or connection error: {str(e)}")
         raise
+    except Exception as e:
+        logger.error(f"Summary generation failed: {str(e)}")
+        return {'status': 'error', 'message': str(e)}
