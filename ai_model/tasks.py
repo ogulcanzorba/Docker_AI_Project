@@ -1,20 +1,21 @@
 from celery import shared_task
 from django.core.cache import cache
-from django.conf import settings
 from django.contrib.auth.models import User
 from .models import ChatHistory, Quiz, Transcript
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import re
 import logging
 from .utils.pdf_processing import process_lecture_pdf
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
 
 @shared_task
 def generate_quiz(user_id, lecture_name, lecture_prompt_path):
     logger.info(f"Starting quiz generation for user {user_id}, lecture {lecture_name}")
-
     try:
         with open(lecture_prompt_path, "r") as f:
             base_prompt = f.read().strip()
@@ -225,21 +226,27 @@ def generate_quiz(user_id, lecture_name, lecture_prompt_path):
         logger.error(f"Quiz generation failed: {str(e)}")
         return {"status": "error", "error": str(e)}
 
-def split_text_into_chunks(text, chunk_size=2000):
+def split_text_into_chunks(text, chunk_size=20000):
     chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-    logger.info(f"Text split into {len(chunks)} chunks")
-    return chunks
+    filtered_chunks = [chunk for chunk in chunks if len(chunk.strip()) > 100]
+    logger.info(f"Text split into {len(filtered_chunks)} chunks")
+    return filtered_chunks[:2]  # Max 2 chunk
 
 def process_with_gemma(chunk, model_name='gemma3:1b'):
-    prompt = f"""
-    Summarize the following text in 50-100 words, focusing only on core technical concepts for a computer science lecture. Start with "The key concept is…" and use a concise tone. Exclude examples, anecdotes, non-technical details, introductions, or explanations. Output ONLY the summary text starting with "The key concept is…":
-
-    {chunk}
-    """
+    prompt = f"Summarize in 50 words, starting with 'Key concept:':\n{chunk}"
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    session.mount('http://', HTTPAdapter(max_retries=retries))
     try:
-        response = requests.post(
+        response = session.post(
             "http://ollama:11434/api/generate",
-            json={"model": model_name, "prompt": prompt, "stream": False},
+            json={
+                "model": model_name,
+                "prompt": prompt,
+                "stream": False,
+                "num_ctx": 1024,
+                "num_predict": 300
+            },
             timeout=60
         )
         response.raise_for_status()
@@ -252,43 +259,35 @@ def process_with_gemma(chunk, model_name='gemma3:1b'):
         return chunk_text
     except requests.RequestException as e:
         logger.error(f"Ollama API timeout or connection error for chunk: {str(e)}")
-        raise
+        return f"Error: {str(e)}"
     except Exception as e:
         logger.error(f"Error processing chunk with Gemma: {str(e)}")
-        return f"Error processing chunk: {str(e)}"
-
-def finalize_transcript(chunks_results):
-    combined = "\n".join(chunks_results)
-    final_prompt = f"""
-    Combine the following summaries into a single summary for a computer science lecture. Start with "The key concepts are…" and use a concise tone. Focus only on core technical concepts, keeping the length 200-300 words. Exclude examples, anecdotes, non-technical details, introductions, or explanations. Output ONLY the summary text starting with "The key concepts are…":
-
-    {combined}
-    """
-    try:
-        response = requests.post(
-            "http://ollama:11434/api/generate",
-            json={"model": "gemma3:1b", "prompt": final_prompt, "stream": False},
-            timeout=60
-        )
-        response.raise_for_status()
-        ollama_data = response.json()
-        final_text = ollama_data.get("response", "")
-        logger.info(f"Final summary generated: {final_text[:100]}...")
-        if not final_text:
-            logger.error("Empty response from Ollama for final summary")
-            raise ValueError("Empty response from Ollama")
-        return final_text
-    except requests.RequestException as e:
-        logger.error(f"Ollama API timeout or connection error for final summary: {str(e)}")
-        raise
-    except Exception as e:
-        logger.error(f"Error finalizing summary: {str(e)}")
-        return f"Error in final summary: {str(e)}"
+        return f"Error: {str(e)}"
 
 @shared_task
 def generate_transcript(user, lecture, pdf_file):
     logger.info(f"Starting summary generation for user {user}, lecture {lecture}, file {pdf_file}")
     try:
+        # Cache kontrolü
+        cache_key = f"transcript:{lecture}:{pdf_file}"
+        cached_summary = cache.get(cache_key)
+        if cached_summary:
+            logger.info("Returning cached summary")
+            user_obj = User.objects.get(id=user)
+            pdf_file_name = os.path.basename(pdf_file) if isinstance(pdf_file, str) else pdf_file.name
+            transcript = Transcript.objects.create(
+                user=user_obj,
+                lecture=lecture,
+                transcript_text=cached_summary,
+                pdf_file=pdf_file_name
+            )
+            return {
+                'status': 'success',
+                'transcript_id': transcript.id,
+                'lecture': lecture,
+                'transcript_text': cached_summary
+            }
+
         # PDF'den metni çıkar
         transcript_text = process_lecture_pdf(pdf_file)
         if not transcript_text:
@@ -296,33 +295,38 @@ def generate_transcript(user, lecture, pdf_file):
             return {'status': 'error', 'message': 'No text extracted from PDF'}
 
         # Metni chunk'lara böl
-        chunks = split_text_into_chunks(transcript_text, chunk_size=2000)
+        chunks = split_text_into_chunks(transcript_text, chunk_size=20000)
 
-        # Her chunk için özet üret
+        # Chunk'ları paralel işleme
         results = []
-        for i, chunk in enumerate(chunks):
-            logger.info(f"Processing chunk {i+1}/{len(chunks)}")
-            result = process_with_gemma(chunk, model_name='gemma3:1b')
-            results.append(result)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_to_chunk = {executor.submit(process_with_gemma, chunk): chunk for chunk in chunks}
+            for future in as_completed(future_to_chunk):
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Chunk processing failed: {str(e)}")
+                    results.append(f"Error: {str(e)}")
 
         # Nihai özeti birleştir
-        final_summary = finalize_transcript(results)
-
-        # Özeti temizle
+        final_summary = "\n".join(results)
         cleaned_text = " ".join(final_summary.strip().split())
         logger.info(f"Cleaned summary: {cleaned_text[:500]}...")
 
         # Özeti veritabanına kaydet
         user = User.objects.get(id=user)
-        # pdf_file'ı FileField için uygun hale getir
         pdf_file_name = os.path.basename(pdf_file) if isinstance(pdf_file, str) else pdf_file.name
         transcript = Transcript.objects.create(
             user=user,
             lecture=lecture,
             transcript_text=cleaned_text,
-            pdf_file=pdf_file
+            pdf_file=pdf_file_name
         )
         logger.info(f"Summary saved with ID {transcript.id}")
+
+        # Cache'e kaydet
+        cache.set(cache_key, cleaned_text, timeout=86400)
 
         return {
             'status': 'success',
