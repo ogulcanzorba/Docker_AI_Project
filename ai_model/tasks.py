@@ -233,7 +233,7 @@ def split_text_into_chunks(text, chunk_size=20000):
     return filtered_chunks[:2]  # Max 2 chunk
 
 def process_with_gemma(chunk, model_name='gemma3:1b'):
-    prompt = f"Summarize in 50 words, starting with 'Key concept:':\n{chunk}"
+    prompt = f"Summarize this in 75-100 words, starting with 'Key concept:'. Focus strictly on technical networking concepts (e.g., protocols, architectures, systems). Exclude non-technical content. Do not use markdown or headings. Only output the summary.\n{chunk}"
     session = requests.Session()
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount('http://', HTTPAdapter(max_retries=retries))
