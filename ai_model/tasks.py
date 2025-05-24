@@ -7,109 +7,75 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import re
 import logging
-from .utils.pdf_processing import process_lecture_pdf
-import os
+import base64
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from .utils.pdf_processing import process_lecture_pdf
 logger = logging.getLogger(__name__)
 
 @shared_task
 def generate_quiz(user_id, lecture_name, lecture_prompt_path):
     logger.info(f"Starting quiz generation for user {user_id}, lecture {lecture_name}")
     try:
-        with open(lecture_prompt_path, "r") as f:
-            base_prompt = f.read().strip()
-        if not base_prompt:
-            raise ValueError("Prompt file is empty")
-    except (FileNotFoundError, ValueError) as e:
-        base_prompt = f"You are a helpful CS tutor specializing in {lecture_name.replace('_', ' ').title()}."
-        logger.error(f"Prompt error for {lecture_prompt_path}: {str(e)}")
+        try:
+            with open(lecture_prompt_path, "r") as f:
+                base_prompt = f.read().strip()
+            if not base_prompt:
+                raise ValueError("Prompt file is empty")
+        except (FileNotFoundError, ValueError) as e:
+            base_prompt = f"You are a helpful CS tutor specializing in {lecture_name.replace('_', ' ').title()}."
+            logger.error(f"Prompt error for {lecture_prompt_path}: {str(e)}")
 
-    cache_key = f"chat_history:{user_id}:{lecture_name}"
-    chat_history = cache.get(cache_key)
-    conversation = ""
+        chat_history = ChatHistory.objects.filter(user_id=user_id, lecture=lecture_name).order_by('created_at')
+        if not chat_history.exists():
+            logger.error("No chat history available")
+            return {"status": "error", "error": "No chat history available"}
 
-    if chat_history:
-        recent_history = chat_history[-5:]
-        conversation_lines = []
-        total_chars = 0
-        max_chars = 1000
-        for msg in recent_history:
-            user_input = msg.user_input.strip()
-            bot_response = msg.bot_response.strip()
-            if user_input.endswith("?") or any(
-                    kw in user_input.lower() for kw in ["explain", "how does", "why", "what is"]):
-                line = f"User question: {user_input}"
-            else:
-                line = f"You: {user_input}\nBot: {bot_response}"
-            if total_chars + len(line) <= max_chars:
-                conversation_lines.append(line)
-                total_chars += len(line)
-            else:
-                break
-        conversation = "\n".join(conversation_lines)
-        logger.info(f"Using Redis chat history: {len(recent_history)} messages, {total_chars} chars")
-    else:
-        logger.info("Redis cache miss, falling back to SQLite")
-        db_history = ChatHistory.objects.filter(user_id=user_id, lecture=lecture_name).order_by('created_at')
-        conversation_lines = []
-        total_chars = 0
-        max_chars = 1000
-        for msg in db_history:
-            user_input = msg.user_input.strip()
-            bot_response = msg.bot_response.strip()
-            if user_input.endswith("?") or any(
-                    keyword in user_input.lower() for keyword in ["explain", "how", "why", "what is", "difference"]):
-                line = f"User question: {user_input}"
-            else:
-                line = f"You: {user_input}\nBot: {bot_response}"
-            if total_chars + len(line) <= max_chars:
-                conversation_lines.append(line)
-                total_chars += len(line)
-            else:
-                break
-        conversation = "\n".join(conversation_lines)
-        logger.info(f"Using SQLite chat history: {len(db_history)} messages, {total_chars} chars")
+        conversation = ""
+        for msg in chat_history:
+            if msg.user_input:
+                conversation += f"User: {msg.user_input.strip()}\n"
+            if msg.bot_response:
+                conversation += f"Bot: {msg.bot_response.strip()}\n"
+        logger.info(f"Using {len(chat_history)} chat history messages for quiz")
 
-    quiz_prompt = (
-        f"You are a helpful computer science tutor creating a quiz for the topic: \"{lecture_name.replace('_', ' ').title()}\".\n\n"
-        "Based on the following lecture and conversation history, generate exactly 5 multiple-choice questions. Each question must follow this strict format:\n\n"
-        "1. Question text\n"
-        "A) Option A\n"
-        "B) Option B\n"
-        "C) Option C\n"
-        "D) Option D\n"
-        "Correct: X\n\n"
-        "Where X is one of A, B, C, or D.\n\n"
-        "=== Conversation History ===\n"
-        f"{conversation}\n"
-        "=== End ===\n\n"
-        "⚠️ Instructions:\n"
-        "- Do NOT include introductions, explanations, or summaries.\n"
-        "- Do NOT include markdown (like **bold**, `code`, or ### headers).\n"
-        "- Do NOT output JSON, emojis, or anything outside the format.\n"
-        "- Do NOT say \"Here is your quiz\", \"1)\" instead of \"1.\", or label correct answers in the options.\n"
-        "- Ensure all 5 questions are clearly numbered 1 to 5 and each has exactly 4 choices and one Correct line.\n\n"
-        "🎯 Correct Output Example:\n\n"
-        "1. What is the capital of France?\n"
-        "A) Berlin\n"
-        "B) Madrid\n"
-        "C) Paris\n"
-        "D) Rome\n"
-        "Correct: C\n\n"
-        "2. Which data structure uses LIFO?\n"
-        "A) Queue\n"
-        "B) Array\n"
-        "C) Stack\n"
-        "D) Linked List\n"
-        "Correct: C\n\n"
-        "Now, generate the quiz using only the format shown above."
-    )
+        prompt = (
+            f"{base_prompt}\n\n"
+            f"You are creating a quiz for the topic: \"{lecture_name.replace('_', ' ').title()}\".\n"
+            "Based on the following conversation history, generate exactly 5 multiple-choice questions. "
+            "Each question must have 4 options and one correct answer, in this strict format:\n\n"
+            "1. Question text\n"
+            "A) Option A\n"
+            "B) Option B\n"
+            "C) Option C\n"
+            "D) Option D\n"
+            "Correct: X\n\n"
+            "Where X is one of A, B, C, or D.\n\n"
+            "=== Conversation History ===\n"
+            f"{conversation}\n"
+            "=== End ===\n\n"
+            "Instructions:\n"
+            "- Include content from all user questions and bot responses, including explanations of uploaded documents (e.g., OS_Report).\n"
+            "- Do NOT include introductions, explanations, or summaries.\n"
+            "- Do NOT use markdown, JSON, emojis, or extra text outside the format.\n"
+            "- Ensure all 5 questions are numbered 1 to 5, each with exactly 4 options and one Correct line.\n\n"
+            "Example Output:\n"
+            "1. What is the capital of France?\n"
+            "A) Berlin\n"
+            "B) Madrid\n"
+            "C) Paris\n"
+            "D) Rome\n"
+            "Correct: C\n\n"
+            "2. Which data structure uses LIFO?\n"
+            "A) Queue\n"
+            "B) Array\n"
+            "C) Stack\n"
+            "D) Linked List\n"
+            "Correct: C\n\n"
+        )
 
-    try:
         response = requests.post(
             "http://ollama:11434/api/generate",
-            json={"model": "gemma3:1b", "prompt": quiz_prompt, "stream": False},
+            json={"model": "gemma3:1b", "prompt": prompt, "stream": False},
             timeout=60
         )
         response.raise_for_status()
@@ -144,8 +110,8 @@ def generate_quiz(user_id, lecture_name, lecture_prompt_path):
 
         logger.info(f"Cleaned Ollama response: {cleaned_text[:500]}...")
         if not cleaned_text.startswith("1."):
-            logger.error(f"Unexpected cleaned quiz format: {cleaned_text}")
-            raise ValueError(f"Unexpected cleaned response format: {cleaned_text}")
+            logger.error(f"Unexpected cleaned quiz format: {cleaned_text[:500]}...")
+            raise ValueError(f"Unexpected cleaned response format")
 
         quiz_data = []
         lines = cleaned_text.strip().split('\n')
@@ -200,25 +166,20 @@ def generate_quiz(user_id, lecture_name, lecture_prompt_path):
                 logger.info(f"Saved partial quiz with {len(quiz_data)} questions")
             raise ValueError(f"Expected 5 questions, got {len(quiz_data)}")
 
-        quiz_ids = []
         for item in quiz_data:
-            quiz = Quiz.objects.create(
+            Quiz.objects.create(
                 user_id=user_id,
                 lecture=lecture_name,
                 question=item["question"],
                 options=item["options"],
                 correct_answer=item["correct_answer"]
             )
-            quiz_ids.append(quiz.id)
 
-        ChatHistory.objects.create(
-            user_id=user_id,
-            lecture=lecture_name,
-            quiz_id=Quiz.objects.get(id=quiz_ids[0])
-        )
         logger.info(f"Generated and saved quiz for user {user_id}, lecture {lecture_name}")
+
         cache.delete(f"chat_history:{user_id}:{lecture_name}")
         return {"status": "success", "lecture": lecture_name, "question_count": len(quiz_data)}
+
     except requests.RequestException as e:
         logger.error(f"Ollama API timeout or connection error: {str(e)}")
         raise
@@ -226,14 +187,93 @@ def generate_quiz(user_id, lecture_name, lecture_prompt_path):
         logger.error(f"Quiz generation failed: {str(e)}")
         return {"status": "error", "error": str(e)}
 
-def split_text_into_chunks(text, chunk_size=20000):
-    chunks = [text[i:i + chunk_size] for i in range(0, len(text), chunk_size)]
-    filtered_chunks = [chunk for chunk in chunks if len(chunk.strip()) > 100]
-    logger.info(f"Text split into {len(filtered_chunks)} chunks")
-    return filtered_chunks[:2]  # Max 2 chunk
+@shared_task
+def generate_transcript(user_id, lecture, pdf_base64, pdf_hash, pdf_filename=None):
+    logger.info(f"Starting summary generation for user {user_id}, lecture {lecture}")
+    try:
+        cache_key = f"transcript:{user_id}:{lecture}:{pdf_hash}"
+        cached_data = cache.get(cache_key)
+        if cached_data:
+            logger.info("Returning cached summary")
+            user_obj = User.objects.get(id=user_id)
+            transcript = Transcript.objects.create(
+                user=user_obj,
+                lecture=lecture,
+                title=cached_data['title'],
+                transcript_text=cached_data['transcript_text']
+            )
+            return {
+                'status': 'success',
+                'transcript_id': transcript.id,
+                'lecture': lecture,
+                'transcript_text': cached_data['transcript_text']
+            }
+
+        pdf_bytes = base64.b64decode(pdf_base64)
+
+        try:
+            transcript_text = process_lecture_pdf(pdf_bytes, is_bytes=True)
+        except ValueError as e:
+            logger.error(f"Text extraction failed: {str(e)}")
+            return {'status': 'error', 'message': str(e)}
+
+        chunk_size = 2000
+        chunks = [transcript_text[i:i + chunk_size] for i in range(0, len(transcript_text), chunk_size)]
+
+        results = []
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            future_to_chunk = {executor.submit(process_with_gemma, chunk): chunk for chunk in chunks}
+            for future in as_completed(future_to_chunk):
+                try:
+                    result = future.result()
+                    if result and "Error:" not in result:
+                        results.append(result)
+                except Exception as e:
+                    logger.error(f"Chunk processing failed: {str(e)}")
+
+        final_summary = "\n".join(results)
+        if not final_summary:
+            logger.error("No valid summary generated")
+            return {'status': 'error', 'message': 'Failed to generate summary.'}
+
+        cleaned_text = " ".join(list(dict.fromkeys(final_summary.strip().split())))
+
+        user_obj = User.objects.get(id=user_id)
+        base_title = pdf_filename
+        title = base_title
+        suffix = 1
+        while Transcript.objects.filter(user=user_obj, lecture=lecture, title=title).exists():
+            title = f"{base_title}_{suffix}"
+            suffix += 1
+
+        transcript = Transcript.objects.create(
+            user=user_obj,
+            lecture=lecture,
+            title=title,
+            transcript_text=cleaned_text
+        )
+        logger.info(f"Summary saved with ID {transcript.id}")
+
+        cache_data = {'title': title, 'transcript_text': cleaned_text}
+        cache.set(cache_key, cache_data, timeout=86400)
+        logger.info(f"Cached summary: {cache_key}")
+
+        return {
+            'status': 'success',
+            'transcript_id': transcript.id,
+            'lecture': lecture,
+            'transcript_text': cleaned_text
+        }
+
+    except requests.RequestException as e:
+        logger.error(f"Ollama API timeout or connection error: {str(e)}")
+        return {'status': 'error', 'message': str(e)}
+    except Exception as e:
+        logger.error(f"Summary generation failed: {str(e)}")
+        return {'status': 'error', 'message': str(e)}
 
 def process_with_gemma(chunk, model_name='gemma3:1b'):
-    prompt = f"Summarize this in 75-100 words, starting with 'Key concept:'. Focus strictly on technical networking concepts (e.g., protocols, architectures, systems). Exclude non-technical content. Do not use markdown or headings. Only output the summary.\n{chunk}"
+    prompt = f"Summarize the technical content in 75-100 words, focusing on core concepts. Use clear, natural language without introductory phrases, task references, or repetitive wording.\n{chunk}"
     session = requests.Session()
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount('http://', HTTPAdapter(max_retries=retries))
@@ -242,101 +282,16 @@ def process_with_gemma(chunk, model_name='gemma3:1b'):
             "http://ollama:11434/api/generate",
             json={
                 "model": model_name,
-                "prompt": prompt,
+            "prompt": prompt,
                 "stream": False,
                 "num_ctx": 1024,
-                "num_predict": 300
+                "num_predict": 120
             },
             timeout=60
         )
         response.raise_for_status()
-        ollama_data = response.json()
-        chunk_text = ollama_data.get("response", "")
-        logger.info(f"Gemma response received for chunk: {chunk_text[:100]}...")
-        if not chunk_text:
-            logger.error("Empty response from Ollama for chunk")
-            raise ValueError("Empty response from Ollama")
-        return chunk_text
+        result = response.json().get("response", "")
+        return result.strip() if result else "Error: Empty response"
     except requests.RequestException as e:
-        logger.error(f"Ollama API timeout or connection error for chunk: {str(e)}")
+        logger.error(f"Ollama API error: {str(e)}")
         return f"Error: {str(e)}"
-    except Exception as e:
-        logger.error(f"Error processing chunk with Gemma: {str(e)}")
-        return f"Error: {str(e)}"
-
-@shared_task
-def generate_transcript(user, lecture, pdf_file):
-    logger.info(f"Starting summary generation for user {user}, lecture {lecture}, file {pdf_file}")
-    try:
-        # Cache kontrolü
-        cache_key = f"transcript:{lecture}:{pdf_file}"
-        cached_summary = cache.get(cache_key)
-        if cached_summary:
-            logger.info("Returning cached summary")
-            user_obj = User.objects.get(id=user)
-            pdf_file_name = os.path.basename(pdf_file) if isinstance(pdf_file, str) else pdf_file.name
-            transcript = Transcript.objects.create(
-                user=user_obj,
-                lecture=lecture,
-                transcript_text=cached_summary,
-                pdf_file=pdf_file_name
-            )
-            return {
-                'status': 'success',
-                'transcript_id': transcript.id,
-                'lecture': lecture,
-                'transcript_text': cached_summary
-            }
-
-        # PDF'den metni çıkar
-        transcript_text = process_lecture_pdf(pdf_file)
-        if not transcript_text:
-            logger.error("No text extracted from PDF")
-            return {'status': 'error', 'message': 'No text extracted from PDF'}
-
-        # Metni chunk'lara böl
-        chunks = split_text_into_chunks(transcript_text, chunk_size=20000)
-
-        # Chunk'ları paralel işleme
-        results = []
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_to_chunk = {executor.submit(process_with_gemma, chunk): chunk for chunk in chunks}
-            for future in as_completed(future_to_chunk):
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    logger.error(f"Chunk processing failed: {str(e)}")
-                    results.append(f"Error: {str(e)}")
-
-        # Nihai özeti birleştir
-        final_summary = "\n".join(results)
-        cleaned_text = " ".join(final_summary.strip().split())
-        logger.info(f"Cleaned summary: {cleaned_text[:500]}...")
-
-        # Özeti veritabanına kaydet
-        user = User.objects.get(id=user)
-        pdf_file_name = os.path.basename(pdf_file) if isinstance(pdf_file, str) else pdf_file.name
-        transcript = Transcript.objects.create(
-            user=user,
-            lecture=lecture,
-            transcript_text=cleaned_text,
-            pdf_file=pdf_file_name
-        )
-        logger.info(f"Summary saved with ID {transcript.id}")
-
-        # Cache'e kaydet
-        cache.set(cache_key, cleaned_text, timeout=86400)
-
-        return {
-            'status': 'success',
-            'transcript_id': transcript.id,
-            'lecture': lecture,
-            'transcript_text': cleaned_text
-        }
-    except requests.RequestException as e:
-        logger.error(f"Ollama API timeout or connection error: {str(e)}")
-        raise
-    except Exception as e:
-        logger.error(f"Summary generation failed: {str(e)}")
-        return {'status': 'error', 'message': str(e)}

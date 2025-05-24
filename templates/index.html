@@ -1,48 +1,47 @@
 {% load static %}
 
-
-
 <!DOCTYPE html>
 <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CS Tutor | Select a Lecture</title>
+    <link rel="stylesheet" href="{% static 'css/style.css' %}" />
+  </head>
 
+  <body>
+    <header>
+      <nav class="navbar">
+        <a href="{% url 'lecture_list' %}" class="nav-brand">CS Tutor</a>
+        <div class="nav-links">
+          <span>Welcome, {{ request.user.username }}</span>
+          <a href="{% url 'lecture_list' %}">Lectures</a>
+          <form
+            method="post"
+            action="{% url 'logout' %}"
+            style="display: inline"
+          >
+            {% csrf_token %}
+            <button type="submit" class="nav-button">Logout</button>
+          </form>
+        </div>
+      </nav>
+    </header>
 
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CS Tutor | Select a Lecture</title>
-  <link rel="stylesheet" href="{% static 'css/style.css' %}">
-</head>
-
-<body>
-  <header>
-    <nav class="navbar">
-      <a href="{% url 'lecture_list' %}" class="nav-brand">CS Tutor</a>
-      <div class="nav-links">
-        <span>Welcome, {{ request.user.username }}</span>
-        <a href="{% url 'lecture_list' %}">Lectures</a>
-        <a href="{% url 'upload_lecture_pdf_generic' %}" style="color: white; text-decoration: none;">Upload PDF</a>
-        <form method="post" action="{% url 'logout' %}" style="display:inline;">
-          {% csrf_token %}
-          <button type="submit" class="nav-button">Logout</button>
-        </form>
-      </div>
-    </nav>
-  </header>
-
-  <div class="container">
-    <h2>Available Lectures</h2>
-    {% if lectures %}
+    <div class="container">
+      <h2>Available Lectures</h2>
+      {% if lectures %}
       <div class="lecture-grid">
         {% for lecture in lectures %}
-          <a href="{% url 'lecture' lecture.name %}" class="lecture-card">
-            <h3>{{ lecture.title }}</h3>
-            <p>Explore topics in {{ lecture.title }}.</p>
-          </a>
+        <a href="{% url 'lecture' lecture.name %}" class="lecture-card">
+          <h3>{{ lecture.title }}</h3>
+          <p>Explore topics in {{ lecture.title }}.</p>
+        </a>
         {% endfor %}
       </div>
-    {% else %}
+      {% else %}
       <p class="no-lectures">No lectures available at the moment.</p>
-    {% endif %}
-  </div>
-</body>
+      {% endif %}
+    </div>
+  </body>
 </html>

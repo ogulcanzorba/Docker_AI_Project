@@ -19,7 +19,7 @@ admin.site.register(ChatHistory, ChatHistoryAdmin)  # Register the ChatHistory m
 
 
 class TranscriptAdmin(admin.ModelAdmin):
-    list_display = ('user', 'lecture', 'created_at', 'pdf_file')  # Görünen sütunlar
+    list_display = ('user', 'lecture', 'created_at', )  # Görünen sütunlar
     search_fields = ('transcript_text', 'lecture', 'user__username')  # Arama yapılabilir alanlar
     list_filter = ('lecture', 'created_at')  # Sağ tarafta filtreleme opsiyonları
     readonly_fields = ('transcript_text', 'created_at')  # Sadece okumalık alanlar (değiştirilemez)

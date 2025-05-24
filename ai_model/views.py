@@ -1,32 +1,25 @@
+from django.db import IntegrityError
 from django.shortcuts import render, redirect
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import authenticate, login, logout
 from django.contrib import messages
 from .forms import UserLoginForm
-from .models import ChatHistory, Quiz
+from .models import ChatHistory, Quiz, Transcript
 from django.template.loader import render_to_string
-from django.conf import settings
 from django.http import JsonResponse, StreamingHttpResponse
 from django.core.cache import cache
+from django.contrib.auth.models import User
 import os
 import requests
+import base64
 import json
 import logging
 import hashlib
 import time
-from collections import Counter
 import re
-from .tasks import generate_quiz
-from .tasks import generate_transcript
+from .tasks import generate_quiz, generate_transcript
 from celery.result import AsyncResult
-from django.core.files.storage import FileSystemStorage
-from .utils.pdf_processing import process_lecture_pdf
-from .models import Transcript
-
-
-
-
 
 logger = logging.getLogger(__name__)
 
@@ -45,45 +38,224 @@ def lecture_view(request, lecture_name):
         'algorithms_data_structures': {
             'prompt_file': 'algorithms_data_structures.txt',
             'template': 'lecture_chat.html',
-            'lecture_id': 'algorithms_data_structures'
+            'lecture_id': 'algorithms_data_structures',
+            'title': 'Algorithms and Data Structures'
         },
         'networking': {
             'prompt_file': 'networking.txt',
             'template': 'lecture_chat.html',
-            'lecture_id': 'networking'
+            'lecture_id': 'networking',
+            'title': 'Networking'
         },
         'operating_systems': {
             'prompt_file': 'operating_systems.txt',
             'template': 'lecture_chat.html',
-            'lecture_id': 'operating_systems'
+            'lecture_id': 'operating_systems',
+            'title': 'Operating Systems'
         },
     }
 
     config = lecture_config.get(lecture_name)
     if not config:
-        logger.error(f"Lecture not found: {lecture_name}")
-        return render(request, '404.html', {'error': 'Lecture not found'}, status=404)
-
+        logger.warning(f"Invalid lecture: {lecture_name}")
+        return redirect('lecture_list')
+    
     start_time = time.time()
-    cache_key = f'chat_history:{request.user.id}:{lecture_name}'
-    cached_history = cache.get(cache_key)
-    if cached_history:
-        logger.info(f"Cache hit for {cache_key}, time: {time.time() - start_time:.3f}s")
-        chat_history = cached_history
-    else:
+    cache_key = f"chat_history:{request.user.id}:{lecture_name}"
+    chat_history = cache.get(cache_key)
+    
+    if chat_history is None:
         logger.info(f"Cache miss for {cache_key}, querying SQLite")
         chat_history = ChatHistory.objects.filter(
-            user=request.user, lecture=config['lecture_id']
+            user=request.user,
+            lecture=lecture_name
         ).order_by('created_at')
-        cache.set(cache_key, list(chat_history), timeout=3600)
-        logger.info(f"Cached {cache_key}, time: {time.time() - start_time:.3f}s")
+        
+        # Deduplicate by normalized user_input, keeping the latest
+        seen = {}
+        deduplicated = []
+        for entry in chat_history:
+            key = (entry.user_id, entry.lecture, entry.user_input.lower().strip())
+            if key not in seen or entry.created_at > seen[key].created_at:
+                seen[key] = entry
+        deduplicated = list(seen.values())
+        
+        chat_history = deduplicated
+        if chat_history:
+            cache.set(cache_key, chat_history, timeout=3600)
+            logger.info(
+                f"Cached {cache_key}, {len(chat_history)} entries, time: {time.time() - start_time:.3f}s"
+            )
+        else:
+            logger.debug(f"Not caching empty chat history for {cache_key}")
+    
+    logger.debug(
+        f"Chat history for {cache_key}: {len(chat_history)} entries, "
+        f"message_ids={[entry.message_id for entry in chat_history]}"
+    )
 
-    # Fetch quizzes for the lecture
     quizzes = Quiz.objects.filter(user=request.user, lecture=lecture_name).order_by('created_at')
+    transcripts = Transcript.objects.filter(user=request.user, lecture=lecture_name).order_by('-created_at')
 
     if request.method == "POST":
-        user_input = request.POST.get("question", "").lower()
+        user_input = request.POST.get('question', '').strip()
         logger.info(f"Received question: {user_input}")
+        is_ajax = request.headers.get("x-requested-with") == "XMLHttpRequest"
+
+        if not user_input and is_ajax:
+            logger.info(f"Empty question received, returning chat history for {lecture_name}")
+            html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history, "quizzes": quizzes})
+            return JsonResponse({'html': html})
+
+        if any(keyword in user_input.lower() for keyword in ['summarize', 'explain', 'pdf', 'transcript']):
+            title_query = None
+            user_input_lower = user_input.lower()
+
+            for t in transcripts:
+                if t.title.lower() in user_input_lower:
+                    title_query = t.title
+                    break
+
+            if not title_query:
+                normalized_input = user_input.replace('-', ' ').replace('_', ' ').lower()
+                for t in transcripts:
+                    normalized_title = t.title.replace('-', ' ').replace('_', ' ').lower()
+                    if normalized_title in normalized_input:
+                        title_query = t.title
+                        break
+
+            transcript = None
+            for t in transcripts:
+                cache_key_transcript = f"transcript:{request.user.id}:{lecture_name}:{hashlib.md5(t.transcript_text.encode()).hexdigest()}"
+                cached_data = cache.get(cache_key_transcript)
+                if cached_data and (not title_query or title_query == cached_data['title']):
+                    transcript = t
+                    break
+
+            if not transcript:
+                transcript = transcripts.filter(title=title_query).first() if title_query else transcripts.first()
+
+            if not transcript:
+                logger.error("No transcript found for request")
+                if is_ajax:
+                    return JsonResponse({'error': 'No transcript found'}, status=404)
+                return render(request, config['template'], {
+                    'error': 'No transcript found',
+                    'chat_history': chat_history,
+                    'quizzes': quizzes,
+                    'transcripts': transcripts,
+                    'lecture_name': lecture_name,
+                    'lecture_title': config['title'],
+                    'lecture_config': lecture_config,
+                })
+
+            # Normalize user_input for saving
+            normalized_input = user_input.lower().strip()
+            message_id = f"msg-{hashlib.md5(normalized_input.encode()).hexdigest()[:16]}"
+            logger.debug(
+                f"PDF question: original={user_input}, normalized={normalized_input}, "
+                f"message_id={message_id}, transcript={transcript.title}"
+            )
+
+            # Check for existing entry
+            existing_entry = ChatHistory.objects.filter(
+                user=request.user,
+                lecture=config['lecture_id'],
+                user_input=normalized_input
+            ).first()
+            if existing_entry:
+                logger.info(
+                    f"Duplicate PDF chat entry detected: user={request.user.id}, "
+                    f"lecture={config['lecture_id']}, normalized_input={normalized_input}, "
+                    f"existing_id={existing_entry.id}, message_id={existing_entry.message_id}"
+                )
+                if is_ajax:
+                    return JsonResponse({
+                        'chunk': existing_entry.bot_response,
+                        'message_id': existing_entry.message_id,
+                        'done': True
+                    })
+                return render(request, config['template'], {
+                    'chat_history': chat_history,
+                    'quizzes': quizzes,
+                    'transcripts': transcripts,
+                    'lecture_name': lecture_name,
+                    'lecture_title': config['title'],
+                    'lecture_config': lecture_config,
+                })
+
+            prompt = (
+                f"You are a precise CS tutor. The user asked: '{user_input}'.\n"
+                f"Provide a clear, technical explanation of the following PDF summary, focusing strictly on the content provided. Do not include unrelated topics or suggestions:\n"
+                f"{transcript.transcript_text}"
+            )
+            data = {
+                "model": "gemma3:1b",
+                "prompt": prompt,
+                "stream": True,
+                "num_ctx": 512,
+                "num_predict": 300
+            }
+
+            cache_key_response = f"model_response:{request.user.id}:{hashlib.md5(normalized_input.encode()).hexdigest()}"
+            cache.delete(cache_key_response)
+
+            def stream_response():
+                try:
+                    response = requests.post(
+                        "http://ollama:11434/api/generate",
+                        json=data,
+                        stream=True,
+                        timeout=60
+                    )
+                    response.raise_for_status()
+                    full_response = ""
+                    for line in response.iter_lines():
+                        if line:
+                            try:
+                                if line.strip():
+                                    json_data = json.loads(line.decode('utf-8'))
+                                    chunk = json_data.get("response", "")
+                                    if chunk:
+                                        full_response += chunk
+                                        logger.debug(f"Streaming chunk: {chunk}")
+                                        yield f"data: {json.dumps({'chunk': chunk, 'message_id': message_id})}\n\n"
+                                    if json_data.get("done", False):
+                                        logger.info(f"Stream completed for {user_input}")
+                                        try:
+                                            ChatHistory.objects.create(
+                                                user=request.user,
+                                                user_input=normalized_input,
+                                                bot_response=full_response,
+                                                lecture=config['lecture_id'],
+                                                message_id=message_id
+                                            )
+                                            cache.delete(cache_key)
+                                            chat_history_updated = ChatHistory.objects.filter(
+                                                user=request.user, lecture=config['lecture_id']
+                                            ).order_by('created_at').distinct()
+                                            cache.set(cache_key, list(chat_history_updated), timeout=3600)
+                                            logger.info(f"Saved chat entry for PDF question: {normalized_input}")
+                                        except IntegrityError:
+                                            logger.info(f"Duplicate chat entry skipped: {normalized_input}")
+                                        yield f"data: {json.dumps({'done': True, 'message_id': message_id})}\n\n"
+                                        break
+                            except json.JSONDecodeError as e:
+                                logger.error(f"JSON decode error: {str(e)}, line: {line}")
+                                yield f"data: {json.dumps({'error': 'Invalid response format', 'details': str(e)})}\n\n"
+                                break
+                    else:
+                        logger.warning("Stream ended without 'done' signal")
+                        yield f"data: {json.dumps({'error': 'Stream ended unexpectedly', 'details': 'No done signal received'})}\n\n"
+                except requests.RequestException as e:
+                    logger.error(f"Ollama API error: {str(e)}")
+                    yield f"data: {json.dumps({'error': 'Failed to connect to AI service', 'details': str(e)})}\n\n"
+                except Exception as e:
+                    logger.error(f"Unexpected error in stream: {str(e)}")
+                    yield f"data: {json.dumps({'error': 'Unexpected server error', 'details': str(e)})}\n\n"
+
+            if is_ajax:
+                return StreamingHttpResponse(stream_response(), content_type="text/event-stream")
 
         off_topic_responses = {
             'networking': {
@@ -101,44 +273,42 @@ def lecture_view(request, lecture_name):
         }
 
         off_topic_config = off_topic_responses.get(lecture_name)
-        is_ajax = request.headers.get("x-requested-with") == "XMLHttpRequest"
-
-        if off_topic_config and any(keyword in user_input for keyword in off_topic_config['keywords']):
+        if off_topic_config and any(keyword in user_input.lower() for keyword in off_topic_config['keywords']):
             logger.info(f"Off-topic question detected: {user_input}")
             bot_response = off_topic_config['response']
-            ChatHistory.objects.create(
+            normalized_input = user_input.lower().strip()
+            message_id = f"msg-{hashlib.md5(normalized_input.encode()).hexdigest()[:16]}"
+            if not ChatHistory.objects.filter(
                 user=request.user,
-                user_input=user_input,
-                bot_response=bot_response,
-                lecture=config['lecture_id']
-            )
-            cache.delete(cache_key)
-            logger.info(f"Invalidated cache: {cache_key}")
-            chat_history = ChatHistory.objects.filter(
-                user=request.user, lecture=config['lecture_id']
-            ).order_by('created_at')
-            cache.set(cache_key, list(chat_history), timeout=3600)
-            logger.info(f"Re-cached {cache_key}")
-            if is_ajax:
-                html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history, "quizzes": quizzes})
-                return JsonResponse({'html': html})
-        else:
-            request.session['last_question'] = user_input
-            request.session.modified = True
-            logger.info(f"Stored question in session: {user_input}")
-            if is_ajax:
+                lecture=config['lecture_id'],
+                user_input=normalized_input
+            ).exists():
+                ChatHistory.objects.create(
+                    user=request.user,
+                    user_input=normalized_input,
+                    bot_response=bot_response,
+                    lecture=config['lecture_id'],
+                    message_id=message_id
+                )
+                cache.delete(cache_key)
                 chat_history = ChatHistory.objects.filter(
                     user=request.user, lecture=config['lecture_id']
-                ).order_by('created_at')
-                html = render_to_string("partials/lecture_chat.html", {"chat_history": chat_history, "quizzes": quizzes})
-                return JsonResponse({'html': html})
-    transcripts = Transcript.objects.filter(user=request.user, lecture=lecture_name).order_by('-created_at')
+                ).order_by('created_at').distinct()
+                cache.set(cache_key, list(chat_history), timeout=3600)
+            if is_ajax:
+                def stream_off_topic_response():
+                    yield f"data: {json.dumps({'chunk': bot_response, 'message_id': message_id, 'done': True})}\n\n"
+                return StreamingHttpResponse(stream_off_topic_response(), content_type="text/event-stream")
+        if is_ajax:
+            return stream_lecture_response(request, lecture_name)
+
     return render(request, config['template'], {
         "chat_history": chat_history,
         "quizzes": quizzes,
-        "transcripts": transcripts,  # Add transcripts
+        "transcripts": transcripts,
         "lecture_name": lecture_name,
-        "lecture_title": lecture_name.replace('_', ' ').title(),
+        "lecture_title": config['title'],
+        "lecture_config": lecture_config,
     })
 
 @login_required
@@ -165,7 +335,7 @@ def stream_lecture_response(request, lecture_name):
             yield f"data: {json.dumps({'error': 'Lecture not found'})}\n\n"
         return StreamingHttpResponse(error_stream(), content_type="text/event-stream")
 
-    user_input = request.POST.get("question", request.session.get('last_question', "")).lower()
+    user_input = request.POST.get("question", "").strip()
     if not user_input:
         logger.error("No question provided for streaming")
         def error_stream():
@@ -186,58 +356,96 @@ def stream_lecture_response(request, lecture_name):
         return intersection / union if union > 0 else 0.0
 
     start_time = time.time()
-    normalized_question = user_input.lower().strip()
-    cache_key = f'model_response:{hashlib.md5(normalized_question.encode()).hexdigest()}'
+    normalized_input = user_input.lower().strip()
+    cache_key = f'model_response:{request.user.id}:{hashlib.md5(normalized_input.encode()).hexdigest()}'
     cached_response = cache.get(cache_key)
     logger.info(f"Checked exact cache for {cache_key}: {'Hit' if cached_response else 'Miss'}, time: {time.time() - start_time:.3f}s")
 
-    chat_history = ChatHistory.objects.filter(
-        user=request.user, lecture=config['lecture_id']
-    ).order_by('created_at')
-
-    if not cached_response:
-        current_keywords = extract_keywords(user_input)
-        keyword_cache_key = f'question_keywords:{lecture_name}'
-        keyword_map = cache.get(keyword_cache_key, {})
-        
-        for prev_question, prev_cache_key in keyword_map.items():
-            prev_keywords = extract_keywords(prev_question)
-            similarity = keyword_overlap(current_keywords, prev_keywords)
-            logger.info(f"Similarity between '{user_input}' and '{prev_question}': {similarity:.2f}")
-            if similarity >= 0.6:
-                cached_response = cache.get(prev_cache_key)
-                if cached_response:
-                    logger.info(f"Semantic cache hit for similar question: {prev_question}")
-                    cache_key = prev_cache_key
-                    break
-
     if cached_response:
-        logger.info(f"Streaming cached response for {normalized_question}")
-        ChatHistory.objects.create(
+        logger.info(f"Streaming cached response for {normalized_input}")
+        message_id = f"msg-{hashlib.md5(normalized_input.encode()).hexdigest()[:16]}"
+        if not ChatHistory.objects.filter(
             user=request.user,
-            user_input=user_input,
-            bot_response=cached_response,
-            lecture=config['lecture_id']
-        )
-        chat_cache_key = f'chat_history:{request.user.id}:{lecture_name}'
-        cache.delete(chat_cache_key)
-        logger.info(f"Invalidated cache: {chat_cache_key}")
+            lecture=config['lecture_id'],
+            user_input=normalized_input
+        ).exists():
+            try:
+                ChatHistory.objects.create(
+                    user=request.user,
+                    user_input=normalized_input,
+                    bot_response=cached_response,
+                    lecture=config['lecture_id'],
+                    message_id=message_id
+                )
+                cache_key_history = f"chat_history:{request.user.id}:{lecture_name}"
+                cache.delete(cache_key_history)
+                chat_history_updated = ChatHistory.objects.filter(
+                    user=request.user, lecture=config['lecture_id']
+                ).order_by('created_at').distinct()
+                cache.set(cache_key_history, list(chat_history_updated), timeout=3600)
+                logger.info(f"Saved cached chat entry: {normalized_input}")
+            except IntegrityError:
+                logger.info(f"Duplicate cached chat entry skipped: {normalized_input}")
         def stream_cached_response():
             words = cached_response.split()
             chunk_size = 10
             for i in range(0, len(words), chunk_size):
                 chunk = ' '.join(words[i:i + chunk_size])
-                yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                yield f"data: {json.dumps({'chunk': chunk, 'message_id': message_id})}\n\n"
                 time.sleep(0.1)
-            yield f"data: {json.dumps({'done': True})}\n\n"
+            yield f"data: {json.dumps({'done': True, 'message_id': message_id})}\n\n"
         return StreamingHttpResponse(stream_cached_response(), content_type="text/event-stream")
 
-    current_keywords = extract_keywords(user_input)
-    keyword_cache_key = f'question_keywords:{lecture_name}'
+    current_keywords = extract_keywords(normalized_input)
+    keyword_cache_key = f'question_keywords:{request.user.id}:{lecture_name}'
     keyword_map = cache.get(keyword_cache_key, {})
-    keyword_map[normalized_question] = cache_key
+    logger.debug(f"Keyword map for {keyword_cache_key}: {list(keyword_map.keys())}")
+
+    for prev_question, prev_cache_key in keyword_map.items():
+        prev_keywords = extract_keywords(prev_question)
+        similarity = keyword_overlap(current_keywords, prev_keywords)
+        logger.info(f"Similarity between '{normalized_input}' and '{prev_question}': {similarity:.2f}")
+        if similarity >= 0.6:
+            cached_response = cache.get(prev_cache_key)
+            if cached_response:
+                logger.info(f"Semantic cache hit for similar question: {prev_question}")
+                message_id = f"msg-{hashlib.md5(normalized_input.encode()).hexdigest()[:16]}"
+                if not ChatHistory.objects.filter(
+                    user=request.user,
+                    lecture=config['lecture_id'],
+                    user_input=normalized_input
+                ).exists():
+                    try:
+                        ChatHistory.objects.create(
+                            user=request.user,
+                            user_input=normalized_input,
+                            bot_response=cached_response,
+                            lecture=config['lecture_id'],
+                            message_id=message_id
+                        )
+                        cache_key_history = f"chat_history:{request.user.id}:{lecture_name}"
+                        cache.delete(cache_key_history)
+                        chat_history_updated = ChatHistory.objects.filter(
+                            user=request.user, lecture=config['lecture_id']
+                        ).order_by('created_at').distinct()
+                        cache.set(cache_key_history, list(chat_history_updated), timeout=3600)
+                        logger.info(f"Saved semantic cached chat entry: {normalized_input}")
+                    except IntegrityError:
+                        logger.info(f"Duplicate semantic cached chat entry skipped: {normalized_input}")
+                def stream_cached_response():
+                    words = cached_response.split()
+                    chunk_size = 10
+                    for i in range(0, len(words), chunk_size):
+                        chunk = ' '.join(words[i:i + chunk_size])
+                        yield f"data: {json.dumps({'chunk': chunk, 'message_id': message_id})}\n\n"
+                        time.sleep(0.1)
+                    yield f"data: {json.dumps({'done': True, 'message_id': message_id})}\n\n"
+                return StreamingHttpResponse(stream_cached_response(), content_type="text/event-stream")
+
+    # Update keyword map with normalized input
+    keyword_map[normalized_input] = cache_key
     cache.set(keyword_cache_key, keyword_map, timeout=86400)
-    logger.info(f"Updated keyword map for {lecture_name}")
+    logger.info(f"Updated keyword map for {lecture_name} with {normalized_input}")
 
     prompt_path = os.path.join("prompts", config['prompt_file'])
     try:
@@ -249,15 +457,25 @@ def stream_lecture_response(request, lecture_name):
         base_prompt = f"You are a helpful CS tutor specializing in {lecture_name.replace('_', ' ').title()}."
         logger.error(f"Prompt error for {prompt_path}: {str(e)}")
 
+    chat_history = ChatHistory.objects.filter(
+        user=request.user, lecture=config['lecture_id']
+    ).order_by('created_at').distinct()
     conversation = "\n".join(
         [f"You: {msg.user_input}\nBot: {msg.bot_response}" for msg in chat_history]
     )
-    full_prompt = f"{base_prompt}\n\n{conversation}\nYou: {user_input}\nBot:"
+    full_prompt = (
+        f"{base_prompt}\n\n"
+        f"{conversation}\n"
+        f"You: {user_input}\n"
+        f"Bot: Provide a clear, technical response focused strictly on the user's question. Do not include unrelated topics or suggestions."
+    )
 
     data = {
         "model": "gemma3:1b",
         "prompt": full_prompt,
-        "stream": True
+        "stream": True,
+        "num_ctx": 512,
+        "num_predict": 300
     }
 
     def stream_response():
@@ -269,35 +487,52 @@ def stream_lecture_response(request, lecture_name):
                 timeout=60
             )
             response.raise_for_status()
-
             full_response = ""
+            message_id = f"msg-{hashlib.md5(normalized_input.encode()).hexdigest()[:16]}"
             for line in response.iter_lines():
                 if line:
                     try:
                         json_data = json.loads(line.decode('utf-8'))
                         chunk = json_data.get("response", "")
                         full_response += chunk
-                        yield f"data: {json.dumps({'chunk': chunk})}\n\n"
+                        logger.debug(f"Streaming chunk: {chunk}")
+                        yield f"data: {json.dumps({'chunk': chunk, 'message_id': message_id})}\n\n"
                         if json_data.get("done", False):
                             logger.info(f"Saving response for {user_input}, time: {time.time() - start_time:.3f}s")
-                            ChatHistory.objects.create(
+                            if not ChatHistory.objects.filter(
                                 user=request.user,
-                                user_input=user_input,
-                                bot_response=full_response,
-                                lecture=config['lecture_id']
-                            )
-                            cache.set(cache_key, full_response, timeout=86400)
-                            logger.info(f"Cached response: {cache_key}")
-                            chat_cache_key = f'chat_history:{request.user.id}:{lecture_name}'
-                            cache.delete(chat_cache_key)
-                            logger.info(f"Invalidated cache: {chat_cache_key}")
-                            yield f"data: {json.dumps({'done': True})}\n\n"
+                                lecture=config['lecture_id'],
+                                user_input=normalized_input
+                            ).exists():
+                                try:
+                                    ChatHistory.objects.create(
+                                        user=request.user,
+                                        user_input=normalized_input,
+                                        bot_response=full_response,
+                                        lecture=config['lecture_id'],
+                                        message_id=message_id
+                                    )
+                                    cache_key_history = f"chat_history:{request.user.id}:{lecture_name}"
+                                    cache.delete(cache_key_history)
+                                    chat_history_updated = ChatHistory.objects.filter(
+                                        user=request.user, lecture=config['lecture_id']
+                                    ).order_by('created_at').distinct()
+                                    cache.set(cache_key_history, list(chat_history_updated), timeout=3600)
+                                    logger.info(f"Saved chat entry: {normalized_input}")
+                                    # Cache the response
+                                    cache.set(cache_key, full_response, timeout=3600)
+                                    logger.info(f"Cached response: {cache_key}")
+                                except IntegrityError:
+                                    logger.info(f"Duplicate chat entry skipped: {normalized_input}")
+                            yield f"data: {json.dumps({'done': True, 'message_id': message_id})}\n\n"
+                            break
                     except json.JSONDecodeError as e:
                         logger.error(f"JSON decode error: {str(e)}")
-                        yield f"data: {json.dumps({'error': 'Invalid response format'})}\n\n"
+                        yield f"data: {json.dumps({'error': 'Invalid response format', 'details': str(e)})}\n\n"
+                        break
         except requests.RequestException as e:
             logger.error(f"Ollama API error: {str(e)}")
-            yield f"data: {json.dumps({'error': 'Failed to connect to AI service'})}\n\n"
+            yield f"data: {json.dumps({'error': 'Failed to connect to AI service', 'details': str(e)})}\n\n"
 
     logger.info(f"Streaming live response for {user_input}")
     return StreamingHttpResponse(
@@ -335,54 +570,46 @@ def generate_quiz_view(request, lecture_name):
     
     return JsonResponse({'error': 'Invalid request method'}, status=400)
 
-
 @login_required
-def upload_lecture_pdf(request, lecture_name=None):  # Allow lecture_name to be optional
+def upload_lecture_pdf(request, lecture_name):
     lecture_config = {
-        'algorithms_data_structures': {'lecture_id': 'algorithms_data_structures',
-                                       'title': 'Algorithms and Data Structures'},
+        'algorithms_data_structures': {'lecture_id': 'algorithms_data_structures', 'title': 'Algorithms and Data Structures'},
         'networking': {'lecture_id': 'networking', 'title': 'Networking'},
         'operating_systems': {'lecture_id': 'operating_systems', 'title': 'Operating Systems'},
     }
 
     if request.method == "POST":
         logger.info("POST request received for PDF upload")
+
         lecture_name = request.POST.get('lecture_name')
         if lecture_name not in lecture_config:
             logger.error(f"Invalid lecture name: {lecture_name}")
-            messages.error(request, "Please select a valid lecture.")
-            return render(request, 'upload_pdf.html', {
-                'lecture_name': '',
-                'lecture_title': 'Select a Lecture',
-                'lecture_config': lecture_config,
-            })
+            return JsonResponse({'error': 'Please select a valid lecture'}, status=400)
+        
         if request.FILES.get('pdf_file'):
-            logger.info(f"PDF file received: {request.FILES['pdf_file'].name}")
             pdf_file = request.FILES['pdf_file']
-            fs = FileSystemStorage(location=os.path.join(settings.MEDIA_ROOT, 'lecture_pdfs'))
-            filename = fs.save(pdf_file.name, pdf_file)
-            pdf_file_path = os.path.join(settings.MEDIA_ROOT, 'lecture_pdfs', filename)
-            logger.info(f"File saved to: {pdf_file_path}")
-
-            task = generate_transcript.delay(request.user.id, lecture_name, pdf_file_path)
-            logger.info(f"Task queued: {task.id}")
-            return JsonResponse({'task_id': task.id, 'status': 'Transcript generation started'})
+            if not pdf_file.name.lower().endswith('.pdf'):
+                logger.error(f"Invalid file format: {pdf_file.name}")
+                return JsonResponse({'error': 'Only PDF files are allowed'}, status=400)
+            
+            logger.info(f"PDF file received: {pdf_file.name}")
+            try:
+                pdf_bytes = pdf_file.read()
+                pdf_base64 = base64.b64encode(pdf_bytes).decode('utf-8')
+                pdf_hash = hashlib.md5(pdf_bytes).hexdigest()
+                pdf_filename = pdf_file.name.rsplit('.', 1)[0]
+                task = generate_transcript.delay(request.user.id, lecture_name, pdf_base64, pdf_hash, pdf_filename)
+                logger.info(f"Task queued: {task.id}")
+                return JsonResponse({'task_id': task.id, 'status': 'Transcript generation started'})
+            except Exception as e:
+                logger.error(f"Error processing PDF: {str(e)}")
+                return JsonResponse({'error': 'Error processing PDF'}, status=500)
         else:
             logger.error("No PDF file provided")
-            messages.error(request, "Please select a PDF file.")
-            return render(request, 'upload_pdf.html', {
-                'lecture_name': lecture_name or '',
-                'lecture_title': lecture_config.get(lecture_name, {'title': 'Select a Lecture'})['title'],
-                'lecture_config': lecture_config,
-            })
+            return JsonResponse({'error': 'Please select a PDF file'}, status=400)
 
-    logger.info("Rendering upload page")
-    return render(request, 'upload_pdf.html', {
-        'lecture_name': lecture_name or '',
-        'lecture_title': lecture_config.get(lecture_name, {'title': 'Select a Lecture'})['title'],
-        'lecture_config': lecture_config,
-    })
-
+    return redirect('lecture', lecture_name=lecture_name)
+    
 @login_required
 def transcript_detail(request, transcript_id):
     transcript = Transcript.objects.get(id=transcript_id, user=request.user)
@@ -423,12 +650,91 @@ def custom_logout(request):
     logout(request)
     return redirect('login')
 
-
 @login_required
 def task_status(request, task_id):
     task = AsyncResult(task_id)
+    logger.info(f"Task {task_id} status: {task.state}")
     if task.state == 'SUCCESS':
         return JsonResponse({'status': 'SUCCESS'})
     elif task.state == 'FAILURE':
         return JsonResponse({'status': 'FAILURE', 'error': str(task.result)})
     return JsonResponse({'status': task.state})
+
+from django.views.decorators.csrf import csrf_exempt
+@csrf_exempt
+def save_chat(request, lecture_name):
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            question = data.get("question", "").strip()
+            answer = data.get("answer", "").strip()
+            user_id = data.get("user_id")
+            lecture = data.get("lecture", lecture_name)
+            message_id = data.get("message_id")
+            
+            # Normalize question for duplicate checking
+            normalized_question = question.lower().strip()
+            logger.debug(
+                f"save_chat: user_id={user_id}, lecture={lecture}, "
+                f"message_id={message_id}, original_question={question}, "
+                f"normalized_question={normalized_question}"
+            )
+            
+            # Validate required fields
+            if not all([question, answer, user_id, lecture, message_id]):
+                logger.error(
+                    f"Missing fields in save_chat: "
+                    f"question={bool(question)}, answer={bool(answer)}, "
+                    f"user_id={bool(user_id)}, lecture={bool(lecture)}, "
+                    f"message_id={bool(message_id)}, received: {data}"
+                )
+                return JsonResponse({"status": "error", "error": "Missing required fields"}, status=400)
+            
+            # Validate user_id
+            try:
+                user = User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                logger.error(f"Invalid user_id: {user_id}")
+                return JsonResponse({"status": "error", "error": "Invalid user ID"}, status=400)
+            
+            # Check for existing entry
+            existing_entry = ChatHistory.objects.filter(
+                user=user,
+                lecture=lecture,
+                user_input=normalized_question
+            ).first()
+            if existing_entry:
+                logger.info(
+                    f"Duplicate chat entry detected for user {user_id}, "
+                    f"lecture {lecture}, normalized_question={normalized_question}, "
+                    f"existing entry: id={existing_entry.id}, message_id={existing_entry.message_id}"
+                )
+                return JsonResponse({"status": "success", "message_id": existing_entry.message_id})
+            
+            # Create new chat entry
+            chat_entry = ChatHistory.objects.create(
+                user=user,
+                lecture=lecture,
+                user_input=normalized_question,
+                bot_response=answer,
+                message_id=message_id
+            )
+            cache_key = f"chat_history:{user_id}:{lecture}"
+            cache.delete(cache_key)
+            logger.info(f"Saved chat entry {chat_entry.id} for user {user_id}, lecture {lecture}")
+            return JsonResponse({"status": "success", "message_id": message_id})
+        
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in save_chat: {str(e)}, body: {request.body[:500]}")
+            return JsonResponse({"status": "error", "error": "Invalid JSON format"}, status=400)
+        
+        except IntegrityError as e:
+            logger.error(f"Database integrity error in save_chat: {str(e)}, data: {data}")
+            return JsonResponse({"status": "success", "message_id": message_id})
+        
+        except Exception as e:
+            logger.error(f"Unexpected error in save_chat: {str(e)}, data: {data}", exc_info=True)
+            return JsonResponse({"status": "error", "error": f"Server error: {str(e)}"}, status=500)
+    
+    logger.warning(f"Invalid method for save_chat: {request.method}")
+    return JsonResponse({"status": "error", "error": "Method not allowed"}, status=405)
