@@ -626,9 +626,10 @@ def login_page(request):
             user = authenticate(request, username=username, password=password)
             if user is not None:
                 login(request, user)
-                return redirect('lecture_list')
+                return redirect('lecture_list')  # Removed success message
             else:
                 messages.error(request, "Invalid username or password.")
+        return render(request, 'login.html', {'form': form})
     else:
         form = UserLoginForm()
     return render(request, 'login.html', {'form': form})
@@ -641,7 +642,11 @@ def signup(request):
         if form.is_valid():
             user = form.save()
             login(request, user)
+            messages.success(request, "Account created successfully! You are now logged in.")
             return redirect('lecture_list')
+        else:
+            messages.error(request, "There was an error with your submission. Please check the form.")
+            return render(request, 'signup.html', {'form': form})
     else:
         form = UserCreationForm()
     return render(request, 'signup.html', {'form': form})
