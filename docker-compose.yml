@@ -8,9 +8,11 @@ services:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://myuser:mypassword@postgres:5432/mydb
     depends_on:
       - ollama
       - redis
+      - postgres
     networks:
       - app-network
 
@@ -18,7 +20,7 @@ services:
     image: ollama/ollama:latest
     command: serve
     volumes:
-      - ollama-data:/root/.ollama   # <--- change here
+      - ollama-data:/root/.ollama
     ports:
       - "11434:11434"
     networks:
@@ -41,13 +43,29 @@ services:
     depends_on:
       - redis
       - ollama
+      - postgres
     environment:
       - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://myuser:mypassword@postgres:5432/mydb
+    networks:
+      - app-network
+
+  postgres:
+    image: postgres:latest
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydb
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     networks:
       - app-network
 
 volumes:
-  ollama-data:   # <--- point to the existing volume
+  ollama-data:
+  postgres-data:
 
 networks:
   app-network:
