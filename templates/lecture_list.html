@@ -1,10 +1,19 @@
 {% extends "index.html" %}
 
 {% block content %}
-  <h2>Available Lectures</h2>
-  <ul>
-    {% for lecture in lectures %}
-      <li><a href="{% url 'lecture' lecture.name %}">{{ lecture.title }}</a></li>
-    {% endfor %}
-  </ul>
+  <div class="container">
+    <h2>Available Lectures</h2>
+    {% if lectures %}
+    <div class="lecture-grid">
+      {% for lecture in lectures %}
+      <a href="{% url 'lecture' lecture.name %}" class="lecture-card">
+        <h3>{{ lecture.title }}</h3>
+        <p>Explore topics in {{ lecture.title }}.</p>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="no-lectures">No lectures available at the moment.</p>
+    {% endif %}
+  </div>
 {% endblock %}
