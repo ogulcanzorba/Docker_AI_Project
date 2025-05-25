@@ -1,28 +1,35 @@
-name: Django CI with Docker Compose
+name: CI for Django + Docker project
 
 on:
   push:
-    branches: [ main, testing ]
+    branches:
+      - main
+      - testing  
   pull_request:
-    branches: [ main, testing ]
 
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set up Docker Compose
-        run: docker-compose up -d
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
 
-      - name: Wait for services to be ready
-        run: sleep 20
+      - name: Start services with Docker Compose
+        run: docker compose up -d --wait
 
-      - name: Run Django Tests
-        run: docker-compose exec -T web python manage.py test
+      - name: Wait for web service to be ready
+        run: |
+          echo "Waiting for Django to be ready..."
+          sleep 10  # çok basic ama iş görüyor
 
-      - name: Shut down Docker Compose
+      - name: Run Django tests
+        run: docker compose exec -T web python manage.py test
+
+      - name: Tear down
         if: always()
-        run: docker-compose down -v
+        run: docker compose down -v
+
