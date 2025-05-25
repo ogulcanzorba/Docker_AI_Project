@@ -8,24 +8,24 @@
 .error {
   color: #e53e3e;
 }
-/* Genel sayfa düzeni */
+
 .container {
-  max-width: 800px; /* Tüm içeriği daralt */
+  max-width: 800px;
   margin: 0 auto;
-  padding: 1rem; /* Daha az padding */
+  padding: 1rem;
 }
 h3 {
-  text-align: left; /* Transcripts başlığı sola hizalı, ama dar alanda */
+  text-align: left;
   margin-top: 1.5rem;
   margin-bottom: 0.5rem;
 }
 /* Chat kartı */
 .card-container {
-  max-width: 800px; /* Chat kartını daralt */
+  max-width: 800px;
   margin: 0 auto;
-  background: #fff;
+  background: #F9FAFB; /* Slightly off-white to blend better with the background */
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); /* Softer shadow for less contrast */
 }
 .card-header {
   display: flex;
@@ -35,7 +35,7 @@ h3 {
 }
 .text-chat {
   flex-grow: 1;
-  text-align: center; /* Chat with CS Tutor’ü ortala */
+  text-align: center;
   font-size: 1.25rem;
   font-weight: 600;
 }
@@ -59,7 +59,7 @@ main.container {
 }
 .message-input {
   position: fixed;
-  bottom: 16px; /* Sayfanın altından 16px yukarı */
+  bottom: 16px;
   left: 0;
   right: 0;
   z-index: 1000;
