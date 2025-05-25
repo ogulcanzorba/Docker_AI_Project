@@ -71,7 +71,7 @@ def lecture_view(request, lecture_name):
             lecture=lecture_name
         ).order_by('created_at')
         
-        # Deduplicate by normalized user_input, keeping the latest
+
         seen = {}
         deduplicated = []
         for entry in chat_history:
@@ -149,7 +149,7 @@ def lecture_view(request, lecture_name):
                     'lecture_config': lecture_config,
                 })
 
-            # Normalize user_input for saving
+
             normalized_input = user_input.lower().strip()
             message_id = f"msg-{hashlib.md5(normalized_input.encode()).hexdigest()[:16]}"
             logger.debug(
@@ -157,7 +157,7 @@ def lecture_view(request, lecture_name):
                 f"message_id={message_id}, transcript={transcript.title}"
             )
 
-            # Check for existing entry
+
             existing_entry = ChatHistory.objects.filter(
                 user=request.user,
                 lecture=config['lecture_id'],
@@ -442,7 +442,7 @@ def stream_lecture_response(request, lecture_name):
                     yield f"data: {json.dumps({'done': True, 'message_id': message_id})}\n\n"
                 return StreamingHttpResponse(stream_cached_response(), content_type="text/event-stream")
 
-    # Update keyword map with normalized input
+
     keyword_map[normalized_input] = cache_key
     cache.set(keyword_cache_key, keyword_map, timeout=86400)
     logger.info(f"Updated keyword map for {lecture_name} with {normalized_input}")
@@ -677,7 +677,7 @@ def save_chat(request, lecture_name):
             lecture = data.get("lecture", lecture_name)
             message_id = data.get("message_id")
             
-            # Normalize question for duplicate checking
+
             normalized_question = question.lower().strip()
             logger.debug(
                 f"save_chat: user_id={user_id}, lecture={lecture}, "
@@ -685,7 +685,7 @@ def save_chat(request, lecture_name):
                 f"normalized_question={normalized_question}"
             )
             
-            # Validate required fields
+
             if not all([question, answer, user_id, lecture, message_id]):
                 logger.error(
                     f"Missing fields in save_chat: "
@@ -695,14 +695,14 @@ def save_chat(request, lecture_name):
                 )
                 return JsonResponse({"status": "error", "error": "Missing required fields"}, status=400)
             
-            # Validate user_id
+
             try:
                 user = User.objects.get(id=user_id)
             except User.DoesNotExist:
                 logger.error(f"Invalid user_id: {user_id}")
                 return JsonResponse({"status": "error", "error": "Invalid user ID"}, status=400)
             
-            # Check for existing entry
+
             existing_entry = ChatHistory.objects.filter(
                 user=user,
                 lecture=lecture,
@@ -716,7 +716,7 @@ def save_chat(request, lecture_name):
                 )
                 return JsonResponse({"status": "success", "message_id": existing_entry.message_id})
             
-            # Create new chat entry
+
             chat_entry = ChatHistory.objects.create(
                 user=user,
                 lecture=lecture,
