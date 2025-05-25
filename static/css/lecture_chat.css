@@ -23,9 +23,9 @@ h3 {
 .card-container {
   max-width: 800px; /* Chat kartını daralt */
   margin: 0 auto;
-  background: #fff;
+  background: #F9FAFB; /* Slightly off-white to blend better with the background */
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); /* Softer shadow for less contrast */
 }
 .card-header {
   display: flex;
