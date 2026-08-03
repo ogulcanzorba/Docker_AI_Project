@@ -171,6 +171,16 @@
           input.focus();
         }
 
+        function createMessageBox(side, dataId, text) {
+          const box = document.createElement("div");
+          box.className = `message-box ${side}`;
+          box.setAttribute("data-id", dataId);
+          const p = document.createElement("p");
+          p.textContent = text;
+          box.appendChild(p);
+          return box;
+        }
+
         function generateMessageId(question) {
           const normalized = question.trim().toLowerCase();
           return `msg-${btoa(encodeURIComponent(normalized)).substring(0, 16).replace(/[^a-zA-Z0-9]/g, '')}`;
@@ -208,19 +218,13 @@
             return;
           }
 
-          const userMessage = document.createElement("div");
-          userMessage.className = "message-box right";
-          userMessage.setAttribute("data-id", messageId);
-          userMessage.innerHTML = `<p>${question}</p>`;
+          const userMessage = createMessageBox("right", messageId, question);
           chatBox.insertBefore(userMessage, loading);
           setTimeout(() => {
             chatBox.scrollTop = chatBox.scrollHeight;
           }, 0);
 
-          const botMessage = document.createElement("div");
-          botMessage.className = "message-box left";
-          botMessage.setAttribute("data-id", `${messageId}-response`);
-          botMessage.innerHTML = "<p>Generating answer...</p>";
+          const botMessage = createMessageBox("left", `${messageId}-response`, "Generating answer...");
           chatBox.insertBefore(botMessage, loading);
           setTimeout(() => {
             chatBox.scrollTop = chatBox.scrollHeight;
@@ -299,12 +303,7 @@
                           .then((response) => response.json())
                           .then((data) => {
                             if (loading.parentNode) loading.parentNode.removeChild(loading);
-                            const tempDiv = document.createElement("div");
-                            tempDiv.innerHTML = data.html;
-                            const quizContainer = tempDiv.querySelector(".quiz-container");
-                            if (quizContainer) {
-                              chatBox.appendChild(quizContainer);
-                            }
+                            replaceQuizContainer(data.html);
                             setTimeout(() => {
                               chatBox.scrollTop = chatBox.scrollHeight;
                             }, 0);
@@ -378,7 +377,6 @@
                   body: JSON.stringify({
                     question,
                     answer: fullResponse,
-                    user_id: "{{ user.id }}",
                     lecture: "{{ lecture_name }}",
                     message_id: messageId,
                   }),
@@ -440,7 +438,7 @@
                         if (data.chunk) {
                           fullResponse += data.chunk;
                           if (botMessage?.querySelector("p")) {
-                            botMessage.querySelector("p").innerHTML = fullResponse;
+                            botMessage.querySelector("p").textContent = fullResponse;
                             setTimeout(() => chatBox.scrollTop = chatBox.scrollHeight, 0);
                           }
                         } else if (data.done) {
@@ -475,13 +473,10 @@
                 const elapsed = (Date.now() - startTime) / 1000;
                 if (fullResponse && elapsed > 1) {
                   if (botMessage?.querySelector("p")) {
-                    botMessage.querySelector("p").innerHTML = fullResponse;
+                    botMessage.querySelector("p").textContent = fullResponse;
                     if (!chatBox.querySelector(`.message-box[data-id="${messageId}"]`)) {
                       console.warn("Message not found in UI, re-appending");
-                      const userMessage = document.createElement("div");
-                      userMessage.className = "message-box right";
-                      userMessage.setAttribute("data-id", messageId);
-                      userMessage.innerHTML = `<p>${question}</p>`;
+                      const userMessage = createMessageBox("right", messageId, question);
                       chatBox.insertBefore(userMessage, botMessage);
                       chatBox.insertBefore(botMessage, loading);
                     }
@@ -598,15 +593,110 @@
           uploadForm.addEventListener('submit', handleUploadSubmit);
         }
 
+        function updateQuizScore(quizContainer) {
+          const scoreEl = quizContainer.querySelector(".quiz-score");
+          if (!scoreEl) return;
+          const total = quizContainer.querySelectorAll(".quiz-question").length;
+          const correct = quizContainer.querySelectorAll(".quiz-question[data-answered=\"true\"] .quiz-option.correct").length;
+          scoreEl.textContent = `Score: ${correct} / ${total}`;
+        }
+
+        function handleQuizOptionClick(e) {
+          const option = e.target.closest(".quiz-option");
+          if (!option) return;
+          const questionEl = option.closest(".quiz-question");
+          if (!questionEl || questionEl.dataset.answered === "true") return;
+
+          questionEl.dataset.answered = "true";
+          questionEl.querySelectorAll(".quiz-option").forEach((btn) => {
+            btn.disabled = true;
+            if (btn.dataset.correct === "true") {
+              btn.classList.add("correct");
+            } else if (btn === option) {
+              btn.classList.add("incorrect");
+            }
+          });
+
+          const quizContainer = questionEl.closest(".quiz-container");
+          if (quizContainer) updateQuizScore(quizContainer);
+
+          const quizId = questionEl.dataset.quizId;
+          if (quizId) {
+            fetch(`/quiz-answer/${quizId}/`, {
+              method: "POST",
+              headers: {
+                "X-CSRFToken": csrfToken,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ selected_answer: option.textContent.trim() }),
+            }).catch((err) => console.error("Failed to save quiz answer:", err));
+          }
+        }
+
+        function replaceQuizContainer(html) {
+          const tempDiv = document.createElement("div");
+          tempDiv.innerHTML = html;
+          const newQuizContainer = tempDiv.querySelector(".quiz-container");
+          const oldQuizContainer = chatBox.querySelector(".quiz-container");
+          if (oldQuizContainer) oldQuizContainer.remove();
+          if (newQuizContainer) {
+            chatBox.appendChild(newQuizContainer);
+            updateQuizScore(newQuizContainer);
+          }
+        }
+
+        function handleQuizRetryClick(e) {
+          const btn = e.target.closest(".quiz-retry-btn");
+          if (!btn) return;
+          const quizContainer = btn.closest(".quiz-container");
+          const lecture = quizContainer ? quizContainer.dataset.lecture : "{{ lecture_name }}";
+
+          btn.disabled = true;
+          btn.textContent = "Resetting...";
+
+          fetch(`/quiz/${lecture}/retry/`, {
+            method: "POST",
+            headers: { "X-CSRFToken": csrfToken },
+          })
+            .then((res) => res.json())
+            .then(() =>
+              fetch("{% url 'lecture' lecture_name=lecture_name %}", {
+                method: "POST",
+                headers: {
+                  "X-CSRFToken": csrfToken,
+                  "X-Requested-With": "XMLHttpRequest",
+                  "Content-Type": "application/x-www-form-urlencoded",
+                },
+                body: new URLSearchParams({ question: "" }),
+              })
+            )
+            .then((res) => res.json())
+            .then((data) => {
+              replaceQuizContainer(data.html);
+              setTimeout(() => chatBox.scrollTop = chatBox.scrollHeight, 0);
+            })
+            .catch((err) => {
+              console.error("Retry quiz failed:", err);
+              btn.disabled = false;
+              btn.textContent = "Retry Quiz";
+            });
+        }
+
         form.removeEventListener("submit", handleFormSubmit);
         input.removeEventListener("keydown", handleInputKeydown);
         input.removeEventListener("input", handleInputInput);
         quizButton.removeEventListener("click", handleQuizClick);
+        chatBox.removeEventListener("click", handleQuizOptionClick);
+        chatBox.removeEventListener("click", handleQuizRetryClick);
 
         form.addEventListener("submit", handleFormSubmit);
         input.addEventListener("keydown", handleInputKeydown);
         input.addEventListener("input", handleInputInput);
         quizButton.addEventListener("click", handleQuizClick);
+        chatBox.addEventListener("click", handleQuizOptionClick);
+        chatBox.addEventListener("click", handleQuizRetryClick);
+
+        document.querySelectorAll(".quiz-container").forEach(updateQuizScore);
       }
     </script>
   </body>

@@ -1,5 +1,5 @@
 from django.db import IntegrityError
-from django.shortcuts import render, redirect
+from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import UserCreationForm
 from django.contrib.auth import authenticate, login, logout
@@ -9,7 +9,6 @@ from .models import ChatHistory, Quiz, Transcript
 from django.template.loader import render_to_string
 from django.http import JsonResponse, StreamingHttpResponse
 from django.core.cache import cache
-from django.contrib.auth.models import User
 import os
 import requests
 import base64
@@ -19,6 +18,7 @@ import hashlib
 import time
 import re
 from .tasks import generate_quiz, generate_transcript
+from .lectures import LECTURES
 from celery.result import AsyncResult
 
 logger = logging.getLogger(__name__)
@@ -26,34 +26,14 @@ logger = logging.getLogger(__name__)
 @login_required
 def lecture_list(request):
     lectures = [
-        {'name': 'algorithms_data_structures', 'title': 'Algorithms and Data Structures'},
-        {'name': 'networking', 'title': 'Networking'},
-        {'name': 'operating_systems', 'title': 'Operating Systems'},
+        {'name': name, 'title': config['title']}
+        for name, config in LECTURES.items()
     ]
     return render(request, 'index.html', {'lectures': lectures})
 
 @login_required
 def lecture_view(request, lecture_name):
-    lecture_config = {
-        'algorithms_data_structures': {
-            'prompt_file': 'algorithms_data_structures.txt',
-            'template': 'lecture_chat.html',
-            'lecture_id': 'algorithms_data_structures',
-            'title': 'Algorithms and Data Structures'
-        },
-        'networking': {
-            'prompt_file': 'networking.txt',
-            'template': 'lecture_chat.html',
-            'lecture_id': 'networking',
-            'title': 'Networking'
-        },
-        'operating_systems': {
-            'prompt_file': 'operating_systems.txt',
-            'template': 'lecture_chat.html',
-            'lecture_id': 'operating_systems',
-            'title': 'Operating Systems'
-        },
-    }
+    lecture_config = LECTURES
 
     config = lecture_config.get(lecture_name)
     if not config:
@@ -257,22 +237,7 @@ def lecture_view(request, lecture_name):
             if is_ajax:
                 return StreamingHttpResponse(stream_response(), content_type="text/event-stream")
 
-        off_topic_responses = {
-            'networking': {
-                'keywords': ['hash table', 'array', 'linked list', 'tree', 'graph', 'sorting', 'searching', 'process', 'memory management', 'file system', 'scheduling', 'virtualization'],
-                'response': "I specialize in Networking. Please ask about network protocols, layers, security, or troubleshooting. For data structures like hash tables, try the Algorithms and Data Structures lecture, or for system processes, try Operating Systems."
-            },
-            'operating_systems': {
-                'keywords': ['hash table', 'array', 'linked list', 'tree', 'graph', 'sorting', 'searching', 'tcp', 'udp', 'ip', 'dns', 'routing', 'switching', 'network security', 'cable', 'coax', 'ethernet', 'wifi', 'protocol'],
-                'response': "I specialize in Operating Systems. Please ask about processes, memory management, or file systems. For networking topics, try the Networking lecture, or for data structures, try Algorithms and Data Structures."
-            },
-            'algorithms_data_structures': {
-                'keywords': ['tcp', 'udp', 'ip', 'dns', 'routing', 'switching', 'network security', 'cable', 'coax', 'ethernet', 'wifi', 'protocol', 'process', 'memory management', 'file system', 'scheduling', 'virtualization'],
-                'response': "This lecture focuses on Algorithms and Data Structures. Please ask about sorting, searching, or data structures like hash tables. For networking, try the Networking lecture, or for system processes, try Operating Systems."
-            }
-        }
-
-        off_topic_config = off_topic_responses.get(lecture_name)
+        off_topic_config = config.get('off_topic')
         if off_topic_config and any(keyword in user_input.lower() for keyword in off_topic_config['keywords']):
             logger.info(f"Off-topic question detected: {user_input}")
             bot_response = off_topic_config['response']
@@ -313,22 +278,7 @@ def lecture_view(request, lecture_name):
 
 @login_required
 def stream_lecture_response(request, lecture_name):
-    lecture_config = {
-        'algorithms_data_structures': {
-            'prompt_file': 'algorithms_data_structures.txt',
-            'lecture_id': 'algorithms_data_structures'
-        },
-        'networking': {
-            'prompt_file': 'networking.txt',
-            'lecture_id': 'networking'
-        },
-        'operating_systems': {
-            'prompt_file': 'operating_systems.txt',
-            'lecture_id': 'operating_systems'
-        },
-    }
-
-    config = lecture_config.get(lecture_name)
+    config = LECTURES.get(lecture_name)
     if not config:
         logger.error(f"Stream lecture not found: {lecture_name}")
         def error_stream():
@@ -542,22 +492,7 @@ def stream_lecture_response(request, lecture_name):
 
 @login_required
 def generate_quiz_view(request, lecture_name):
-    lecture_config = {
-        'algorithms_data_structures': {
-            'prompt_file': 'algorithms_data_structures.txt',
-            'lecture_id': 'algorithms_data_structures'
-        },
-        'networking': {
-            'prompt_file': 'networking.txt',
-            'lecture_id': 'networking'
-        },
-        'operating_systems': {
-            'prompt_file': 'operating_systems.txt',
-            'lecture_id': 'operating_systems'
-        },
-    }
-
-    config = lecture_config.get(lecture_name)
+    config = LECTURES.get(lecture_name)
     if not config:
         logger.error(f"Lecture not found: {lecture_name}")
         return JsonResponse({'error': 'Lecture not found'}, status=404)
@@ -567,22 +502,47 @@ def generate_quiz_view(request, lecture_name):
         prompt_path = os.path.join("prompts", config['prompt_file'])
         task = generate_quiz.delay(request.user.id, lecture_name, prompt_path)
         return JsonResponse({'task_id': task.id, 'status': 'Quiz generation started'})
-    
+
     return JsonResponse({'error': 'Invalid request method'}, status=400)
 
 @login_required
-def upload_lecture_pdf(request, lecture_name):
-    lecture_config = {
-        'algorithms_data_structures': {'lecture_id': 'algorithms_data_structures', 'title': 'Algorithms and Data Structures'},
-        'networking': {'lecture_id': 'networking', 'title': 'Networking'},
-        'operating_systems': {'lecture_id': 'operating_systems', 'title': 'Operating Systems'},
-    }
+def submit_quiz_answer(request, quiz_id):
+    if request.method != "POST":
+        return JsonResponse({'error': 'Invalid request method'}, status=400)
 
+    quiz = get_object_or_404(Quiz, id=quiz_id, user=request.user)
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
+    selected_answer = data.get('selected_answer', '')
+    if selected_answer not in quiz.options:
+        return JsonResponse({'error': 'Invalid answer'}, status=400)
+
+    quiz.selected_answer = selected_answer
+    quiz.save(update_fields=['selected_answer'])
+    logger.info(f"Quiz {quiz.id} answered by user {request.user.id}: {selected_answer}")
+    return JsonResponse({'status': 'success', 'correct': selected_answer == quiz.correct_answer})
+
+@login_required
+def retry_quiz(request, lecture_name):
+    if request.method != "POST":
+        return JsonResponse({'error': 'Invalid request method'}, status=400)
+    if lecture_name not in LECTURES:
+        return JsonResponse({'error': 'Lecture not found'}, status=404)
+
+    updated = Quiz.objects.filter(user=request.user, lecture=lecture_name).update(selected_answer=None)
+    logger.info(f"Quiz retry: user {request.user.id}, lecture {lecture_name}, {updated} question(s) reset")
+    return JsonResponse({'status': 'success'})
+
+@login_required
+def upload_lecture_pdf(request, lecture_name):
     if request.method == "POST":
         logger.info("POST request received for PDF upload")
 
         lecture_name = request.POST.get('lecture_name')
-        if lecture_name not in lecture_config:
+        if lecture_name not in LECTURES:
             logger.error(f"Invalid lecture name: {lecture_name}")
             return JsonResponse({'error': 'Please select a valid lecture'}, status=400)
         
@@ -612,7 +572,7 @@ def upload_lecture_pdf(request, lecture_name):
     
 @login_required
 def transcript_detail(request, transcript_id):
-    transcript = Transcript.objects.get(id=transcript_id, user=request.user)
+    transcript = get_object_or_404(Transcript, id=transcript_id, user=request.user)
     return render(request, 'transcript_detail.html', {'transcript': transcript})
 
 def login_page(request):
@@ -665,43 +625,33 @@ def task_status(request, task_id):
         return JsonResponse({'status': 'FAILURE', 'error': str(task.result)})
     return JsonResponse({'status': task.state})
 
-from django.views.decorators.csrf import csrf_exempt
-@csrf_exempt
+@login_required
 def save_chat(request, lecture_name):
     if request.method == "POST":
         try:
             data = json.loads(request.body)
             question = data.get("question", "").strip()
             answer = data.get("answer", "").strip()
-            user_id = data.get("user_id")
             lecture = data.get("lecture", lecture_name)
             message_id = data.get("message_id")
-            
+            user = request.user
 
             normalized_question = question.lower().strip()
             logger.debug(
-                f"save_chat: user_id={user_id}, lecture={lecture}, "
+                f"save_chat: user_id={user.id}, lecture={lecture}, "
                 f"message_id={message_id}, original_question={question}, "
                 f"normalized_question={normalized_question}"
             )
-            
 
-            if not all([question, answer, user_id, lecture, message_id]):
+
+            if not all([question, answer, lecture, message_id]):
                 logger.error(
                     f"Missing fields in save_chat: "
                     f"question={bool(question)}, answer={bool(answer)}, "
-                    f"user_id={bool(user_id)}, lecture={bool(lecture)}, "
+                    f"lecture={bool(lecture)}, "
                     f"message_id={bool(message_id)}, received: {data}"
                 )
                 return JsonResponse({"status": "error", "error": "Missing required fields"}, status=400)
-            
-
-            try:
-                user = User.objects.get(id=user_id)
-            except User.DoesNotExist:
-                logger.error(f"Invalid user_id: {user_id}")
-                return JsonResponse({"status": "error", "error": "Invalid user ID"}, status=400)
-            
 
             existing_entry = ChatHistory.objects.filter(
                 user=user,
@@ -710,12 +660,12 @@ def save_chat(request, lecture_name):
             ).first()
             if existing_entry:
                 logger.info(
-                    f"Duplicate chat entry detected for user {user_id}, "
+                    f"Duplicate chat entry detected for user {user.id}, "
                     f"lecture {lecture}, normalized_question={normalized_question}, "
                     f"existing entry: id={existing_entry.id}, message_id={existing_entry.message_id}"
                 )
                 return JsonResponse({"status": "success", "message_id": existing_entry.message_id})
-            
+
 
             chat_entry = ChatHistory.objects.create(
                 user=user,
@@ -724,9 +674,9 @@ def save_chat(request, lecture_name):
                 bot_response=answer,
                 message_id=message_id
             )
-            cache_key = f"chat_history:{user_id}:{lecture}"
+            cache_key = f"chat_history:{user.id}:{lecture}"
             cache.delete(cache_key)
-            logger.info(f"Saved chat entry {chat_entry.id} for user {user_id}, lecture {lecture}")
+            logger.info(f"Saved chat entry {chat_entry.id} for user {user.id}, lecture {lecture}")
             return JsonResponse({"status": "success", "message_id": message_id})
         
         except json.JSONDecodeError as e:

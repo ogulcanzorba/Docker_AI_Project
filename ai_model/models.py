@@ -27,6 +27,7 @@ class Quiz(models.Model):
     question = models.TextField()
     options = models.JSONField()
     correct_answer = models.TextField()
+    selected_answer = models.TextField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
